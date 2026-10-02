@@ -59,7 +59,11 @@ function renderHdr(){
   $('uname').textContent = tg?.initDataUnsafe?.user?.first_name || 'Игрок';
   $('league').textContent = `Лига ${state.league}/10`;
   const ef = $('energyFill'); const et = $('energyText');
-  if(ef) ef.style.width = Math.min(100, state.energy/state.maxEnergy*100)+'%';
+  const pct = Math.max(0, Math.min(100, state.energy/state.maxEnergy*100));
+  if(ef){
+    ef.style.width = pct+'%';
+    ef.classList.toggle('low', pct < 20);
+  }
   if(et) et.textContent = `${fmt(state.energy)} / ${fmt(state.maxEnergy)}`;
 }
 
