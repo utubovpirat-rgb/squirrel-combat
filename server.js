@@ -933,8 +933,26 @@ setInterval(async ()=>{
 app.listen(PORT, async ()=>{
   console.log(`🐿️ Squirrel Combat online on ${PORT}`);
   const url = `${process.env.WEBAPP_URL}/bot${process.env.BOT_TOKEN}`;
-  try{
-    await bot.api.setWebhook(url, { drop_pending_updates:true });
-    console.log('Webhook:', url);
-  }catch(e){ console.error('Webhook error:', e.message); }
+
+  for(let attempt = 1; attempt <= 5; attempt++){
+    try{
+      await bot.api.setWebhook(url, { drop_pending_updates:true });
+      console.log(`✅ Webhook установлен (попытка ${attempt}):`, url);
+      break;
+    }catch(e){
+      console.error(`⚠️ Webhook attempt ${attempt} failed:`, e.message);
+      if(attempt < 5) await new Promise(r=>setTimeout(r, 3000));
+    }
+  }
+
+  setInterval(async ()=>{
+    try{
+      const info = await bot.api.getWebhookInfo();
+      if(info.url !== url){
+        console.log('Webhook не совпадает, переустанавливаю...');
+        await bot.api.setWebhook(url, { drop_pending_updates:false });
+        console.log('✅ Webhook восстановлен');
+      }
+    }catch(e){ /* тихо */ }
+  }, 5*60000);
 });
