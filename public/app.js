@@ -76,36 +76,82 @@ function modal(html){
 function closeModal(){ $('modalBg').classList.remove('on'); }
 $('modalBg').onclick = e => { if(e.target.id === 'modalBg') closeModal(); };
 
+// ---------- TAP (улучшенный) ----------
 const sq = $('squirrel');
+let lastTapTs = 0;
+const TAP_DEBOUNCE = 40;
+const SEND_INTERVAL = 150;
+
 sq.addEventListener('pointerdown', e => {
-  if(state.energy <= 0) return;
+  const t = performance.now();
+  if(t - lastTapTs < TAP_DEBOUNCE) return;
+  lastTapTs = t;
+
+  if(state.energy <= 0){
+    toast('⚡ Энергия кончилась', 'pink', 1500);
+    return;
+  }
+
   state.energy--;
   state.balance += state.perClick;
   renderHdr();
+
   spawnFloat(e.clientX, e.clientY, `+${state.perClick}`);
   navigator.vibrate?.(8);
   sq.classList.remove('hit'); void sq.offsetWidth; sq.classList.add('hit');
+  spawnCoinBurst(e.clientX, e.clientY);
+
   state.tapBuffer++;
-  if(!state.tapTimer) state.tapTimer = setTimeout(flushTaps, 220);
+  if(!state.tapTimer) state.tapTimer = setTimeout(flushTaps, SEND_INTERVAL);
 });
 
 async function flushTaps(){
-  const count = state.tapBuffer; state.tapBuffer = 0; state.tapTimer = null;
+  const count = state.tapBuffer;
+  state.tapBuffer = 0;
+  state.tapTimer = null;
   if(count <= 0) return;
+
+  const localBal = state.balance;
+  const localEng = state.energy;
+
   try{
     const r = await api('/api/tap', {count});
     if(r.ok){
-      state.balance = r.balance;
-      state.energy = r.energy;
+      const newTaps = state.tapBuffer;
+      state.balance = r.balance + newTaps * state.perClick;
+      state.energy = Math.max(0, r.energy - newTaps);
+      renderHdr();
+    } else if(r.reason === 'no energy'){
+      state.energy = 0;
       renderHdr();
     }
   }catch(e){
-    state.energy += count;
-    state.balance -= count * state.perClick;
-    renderHdr();
-    console.warn('tap rejected', e.message);
+    if(e.status === 401){
+      console.warn('auth fail', e.message);
+      toast('⚠️ Ошибка авторизации, переоткрой игру', 'pink', 4000);
+    } else {
+      state.balance = localBal;
+      state.energy = localEng;
+      renderHdr();
+      toast('⚠️ ' + (e.message || 'Ошибка сети'), 'pink', 2500);
+    }
   }
 }
+
+function spawnCoinBurst(x, y){
+  const layer = $('floatLayer'); if(!layer) return;
+  const r = layer.getBoundingClientRect();
+  for(let i=0;i<4;i++){
+    const el = document.createElement('div');
+    el.textContent = ['🪙','⭐','💰','✨'][i%4];
+    el.style.cssText = `position:absolute;font-size:14px;pointer-events:none;
+      left:${x-r.left+ (Math.random()*30-15)}px;top:${y-r.top+(Math.random()*10-5)}px;
+      animation:coinBurst .8s ease-out forwards;
+      animation-delay:${i*30}ms;`;
+    layer.appendChild(el);
+    setTimeout(()=>el.remove(), 900);
+  }
+    }
 
 function spawnFloat(x,y,text){
   const layer = $('floatLayer'); if(!layer) return;
