@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Squirrel Combat · Admin</title>
+<style>
+:root{--bg:#0a0a12;--panel:#141422;--line:#2a2a48;--gold:#ffd166;--neon:#00f5d4;
+  --pink:#ff006e;--purple:#8338ec;--text:#eaeaf5;--dim:#8888aa;--green:#06d6a0;--red:#ef476f}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,'Segoe UI',Roboto,sans-serif;padding:16px;
+  background-image:radial-gradient(ellipse 80% 50% at 20% 0%,rgba(131,56,236,.15),transparent 60%)}
+h1{font-size:20px;letter-spacing:2px;margin-bottom:4px;
+  background:linear-gradient(90deg,var(--neon),var(--gold),var(--pink));
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.sub{color:var(--dim);font-size:11px;margin-bottom:16px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+.kpi .k{color:var(--dim);font-size:9px;text-transform:uppercase;letter-spacing:1.2px}
+.kpi .v{font-size:22px;font-weight:900;color:var(--gold);margin-top:2px}
+.kpi .v.neon{color:var(--neon)}
+.kpi .v.green{color:var(--green)}
+.charts{display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:16px}
+.chart{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+.chart h3{font-size:11px;color:var(--dim);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px}
+.chart canvas{width:100%;height:150px;display:block}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{text-align:left;padding:6px 4px;border-bottom:1px solid var(--line)}
+th{color:var(--dim);font-size:9px;text-transform:uppercase;letter-spacing:1.2px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
+.row{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--line);font-size:12px}
+.row:last-child{border-bottom:none}
+.row .name{font-weight:700}
+.row .num{color:var(--gold);font-weight:800}
+.toolbar{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap}
+.toolbar button{padding:7px 12px;border-radius:7px;background:var(--panel);border:1px solid var(--line);
+  color:var(--text);font-weight:700;font-size:11px;cursor:pointer;font-family:inherit}
+.toolbar button.on{background:linear-gradient(135deg,var(--neon),var(--gold));color:#08080f}
+.denied{text-align:center;padding:60px 20px;color:var(--red);font-weight:800}
+.section-title{font-size:11px;color:var(--dim);letter-spacing:1.5px;text-transform:uppercase;margin:12px 0 8px}
+.export-links a{display:inline-block;padding:5px 9px;background:#1f1f38;border:1px solid var(--line);
+  border-radius:5px;color:var(--gold);text-decoration:none;font-size:10px;margin:2px}
+</style>
+</head>
+<body>
+<div id="root"><div class="sub">Загрузка...</div></div>
+<script>
+const qs = new URLSearchParams(location.search);
+const initData = qs.get('initData') || (window.Telegram?.WebApp?.initData) || '';
+let days = 30;
+
+async function load(){
+  const r = await fetch('/api/admin/dashboard?days='+days, {
+    headers:{'X-Init-Data':initData}
+  });
+  if(!r.ok){ document.getElementById('root').innerHTML = '<div class="denied">⛔ Доступ запрещён</div>'; return; }
+  const d = await r.json();
+  render(d);
+}
+function render(d){
+  const kpis = `
+    <div class="kpis">
+      <div class="kpi"><div class="k">Игроков</div><div class="v">${fmt(d.totals.total)}</div></div>
+      <div class="kpi"><div class="k">Актив 24ч</div><div class="v green">${fmt(d.totals.active24)}</div></div>
+      <div class="kpi"><div class="k">Актив 7д</div><div class="v neon">${fmt(d.totals.active7)}</div></div>
+      <div class="kpi"><div class="k">Кланов</div><div class="v">${fmt(d.totals.clans)}</div></div>
+      <div class="kpi"><div class="k">Дуэлей</div><div class="v">${fmt(d.totals.duels)}</div></div>
+      <div class="kpi"><div class="k">Промо юзано</div><div class="v">${fmt(d.totals.promosUsed)}</div></div>
+    </div>`;
+  document.getElementById('root').innerHTML = `
+    <h1>Squirrel Combat · Admin</h1>
+    <div class="sub">Метрики за ${days} дней · обновление раз в минуту</div>
+    <div class="toolbar">
+      <button data-d="7"${days===7?' class="on"':''}>7д</button>
+      <button data-d="30"${days===30?' class="on"':''}>30д</button>
+      <button data-d="90"${days===90?' class="on"':''}>90д</button>
+      <button id="refresh" style="margin-left:auto">🔄 Обновить</button>
+    </div>
+    ${kpis}
+    <div class="charts">
+      <div class="chart"><h3>Новые игроки / день</h3><canvas id="cNew"></canvas></div>
+      <div class="chart"><h3>Активные / день</h3><canvas id="cActive"></canvas></div>
+      <div class="chart"><h3>Тапы / день</h3><canvas id="cTaps"></canvas></div>
+      <div class="chart"><h3>Заработок / день</h3><canvas id="cEarn"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="section-title">🏆 Топ-10 игроков</div>
+      ${d.top.map((p,i)=>`<div class="row"><span class="name">${i+1}. ${p.first_name}</span>
+        <span class="num">${fmt(p.total_earned)}</span></div>`).join('')}
+    </div>
+    <div class="card">
+      <div class="section-title">👥 Последние 20 регистраций</div>
+      <table><thead><tr><th>Имя</th><th>Дата</th><th>Заработано</th></tr></thead><tbody>
+        ${d.recent.map(p=>`<tr><td>${p.first_name}</td>
+          <td>${new Date(p.created_at*1000).toLocaleDateString('ru')}</td>
+          <td style="color:var(--gold)">${fmt(p.total_earned)}</td></tr>`).join('')}
+      </tbody></table>
+    </div>
+    <div class="card">
+      <div class="section-title">📥 CSV-экспорт</div>
+      <div class="export-links">
+        ${['players','history','clans','duels','promos','channels'].map(t=>
+          `<a href="/api/admin/export/${t}?initData=${encodeURIComponent(initData)}" target="_blank">${t}</a>`
+        ).join('')}
+      </div>
+    </div>`;
+  document.querySelectorAll('.toolbar [data-d]').forEach(b=>b.onclick=()=>{ days=+b.dataset.d; load(); });
+  document.getElementById('refresh').onclick = load;
+  const m = d.metrics;
+  line('cNew',   m.map(x=>x.day.slice(5)),  m.map(x=>+x.new_players),    '#00f5d4');
+  line('cActive',m.map(x=>x.day.slice(5)),  m.map(x=>+x.active_players), '#ffd166');
+  line('cTaps',  m.map(x=>x.day.slice(5)),  m.map(x=>+x.total_taps),     '#ff006e');
+  line('cEarn',  m.map(x=>x.day.slice(5)),  m.map(x=>+x.total_earned),   '#8338ec');
+}
+function line(id, labels, data, color){
+  const cv = document.getElementById(id); if(!cv) return;
+  const dpr = devicePixelRatio||1;
+  const W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = W*dpr; cv.height = H*dpr;
+  const ctx = cv.getContext('2d'); ctx.scale(dpr,dpr);
+  ctx.clearRect(0,0,W,H);
+  if(!data.length){ ctx.fillStyle='#8888aa'; ctx.font='12px sans-serif'; ctx.fillText('Нет данных',20,40); return; }
+  const pad = {l:35,r:10,t:10,b:20};
+  const iw = W-pad.l-pad.r, ih = H-pad.t-pad.b;
+  const max = Math.max(...data,1);
+  ctx.strokeStyle = '#2a2a48'; ctx.lineWidth = 1;
+  for(let i=0;i<=4;i++){
+    const y = pad.t + ih*i/4;
+    ctx.beginPath(); ctx.moveTo(pad.l,y); ctx.lineTo(pad.l+iw,y); ctx.stroke();
+    ctx.fillStyle = '#5a5a7a'; ctx.font='9px sans-serif';
+    ctx.fillText(fmtShort(max-max*i/4), 4, y+3);
+  }
+  ctx.strokeStyle = color; ctx.lineWidth = 2;
+  ctx.beginPath();
+  data.forEach((v,i)=>{
+    const x = pad.l + iw*i/Math.max(data.length-1,1);
+    const y = pad.t + ih*(1 - v/max);
+    if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+  ctx.globalAlpha = 0.15; ctx.fillStyle = color;
+  ctx.lineTo(pad.l+iw, pad.t+ih); ctx.lineTo(pad.l, pad.t+ih); ctx.closePath(); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#5a5a7a'; ctx.font='9px sans-serif';
+  const step = Math.max(1, Math.floor(labels.length/6));
+  labels.forEach((l,i)=>{ if(i%step===0){
+    const x = pad.l + iw*i/Math.max(labels.length-1,1);
+    ctx.fillText(l, x-12, H-6);
+  }});
+}
+function fmt(n){ return Math.floor(n).toLocaleString('ru'); }
+function fmtShort(n){ if(n>=1e9) return (n/1e9).toFixed(1)+'B'; if(n>=1e6) return (n/1e6).toFixed(1)+'M';
+  if(n>=1e3) return (n/1e3).toFixed(0)+'k'; return Math.round(n); }
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>
