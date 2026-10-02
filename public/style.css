@@ -142,3 +142,81 @@ input{font-family:inherit;outline:none;border:none;background:none;color:inherit
 .row:last-child{border-bottom:none}
 .empty{text-align:center;padding:40px 20px;color:#8888aa;font-size:13px}
 .empty .ic{font-size:50px;margin-bottom:12px;opacity:.4}
+
+/* ===== 3D-БЕЛКА ===== */
+.squirrel-wrap{
+  perspective: 800px;
+  transform-style: preserve-3d;
+}
+#squirrel{
+  transform: translateZ(0);
+  transition: transform .08s cubic-bezier(.2,.9,.3,1), filter .15s;
+  filter:
+    drop-shadow(0 12px 24px rgba(255,180,80,.45))
+    drop-shadow(0 4px 8px rgba(0,0,0,.5));
+  text-shadow: 0 4px 12px rgba(0,0,0,.4);
+  animation: squirrelIdle 2.4s ease-in-out infinite;
+}
+@keyframes squirrelIdle{
+  0%,100%{ transform: translateY(0) rotateX(0deg) rotateZ(0deg); }
+  25%    { transform: translateY(-6px) rotateX(3deg) rotateZ(-1deg); }
+  50%    { transform: translateY(0) rotateX(0deg) rotateZ(0deg); }
+  75%    { transform: translateY(-4px) rotateX(-3deg) rotateZ(1deg); }
+}
+#squirrel:active{
+  transform: scale(.92) translateZ(-20px);
+  filter:
+    drop-shadow(0 6px 14px rgba(255,180,80,.7))
+    drop-shadow(0 2px 4px rgba(0,0,0,.6));
+}
+#squirrel.hit{
+  animation: hit3D .22s cubic-bezier(.2,.9,.3,1);
+}
+@keyframes hit3D{
+  0%{ transform: scale(1) rotateZ(0deg); }
+  35%{ transform: scale(1.15) rotateZ(-6deg); filter: drop-shadow(0 20px 40px rgba(255,180,80,.9)); }
+  70%{ transform: scale(.96) rotateZ(3deg); }
+  100%{ transform: scale(1) rotateZ(0deg); }
+}
+
+@keyframes coinBurst{
+  0%{ opacity:1; transform: translateY(0) scale(.5) rotate(0deg); }
+  60%{ opacity:1; transform: translateY(-60px) scale(1.1) rotate(200deg); }
+  100%{ opacity:0; transform: translateY(-120px) scale(.8) rotate(400deg); }
+}
+
+.energy-fill{
+  background: linear-gradient(90deg,#ffb84d,#ff9e00);
+  box-shadow: 0 0 12px rgba(255,180,80,.5) inset;
+}
+.energy-fill.low{
+  background: linear-gradient(90deg,#ff6b35,#ef476f);
+  animation: energyPulse 1s ease-in-out infinite;
+}
+@keyframes energyPulse{
+  0%,100%{ box-shadow: 0 0 12px rgba(239,71,111,.4); }
+  50%{ box-shadow: 0 0 24px rgba(239,71,111,.9); }
+}
+
+.actions button, .card button, .qb{
+  box-shadow:
+    0 4px 0 rgba(0,0,0,.35),
+    0 6px 12px rgba(0,0,0,.3);
+  transform: translateY(0);
+  transition: transform .08s, box-shadow .08s;
+}
+.actions button:active, .card button:active, .qb:active{
+  transform: translateY(3px);
+  box-shadow:
+    0 1px 0 rgba(0,0,0,.35),
+    0 2px 6px rgba(0,0,0,.3);
+}
+
+.squirrel-wrap::before{
+  content:'';
+  position:absolute;inset:-20px;
+  background: radial-gradient(circle at 50% 60%, rgba(255,180,80,.12), transparent 60%);
+  pointer-events:none;
+  border-radius:50%;
+  z-index:-1;
+                                     }
