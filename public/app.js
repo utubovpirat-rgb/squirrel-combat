@@ -908,5 +908,5 @@ function animateWheel(targetIdx, prizes){
     if(l){ l.classList.add('off'); setTimeout(()=>l.remove(), 700); }
   }, 400);
   go('home');
-  initSquirrel3D();
+  if(typeof initSquirrel3D === 'function') initSquirrel3D();
 })();
