@@ -1,4 +1,4 @@
-// app.js — фронт Squirrel Combat
+// app.js — фронт Squirrel Combat (оптимизированная версия)
 const tg = window.Telegram?.WebApp;
 tg?.ready(); tg?.expand();
 tg?.setHeaderColor?.('#0a0a12');
@@ -12,9 +12,63 @@ const fmt = n => { n = Math.floor(n||0); if(n>=1e9) return (n/1e9).toFixed(2)+'B
 
 const state = {
   player: null, balance: 0, energy: 0, maxEnergy: 1000, perClick: 1, perHour: 0,
-  league: 1, tapBuffer: 0, tapTimer: null, activeDuel: null
+  league: 1, tapBuffer: 0, tapTimer: null, activeDuel: null,
+  sound: true, audioCtx: null, lastEnergyToast: 0
 };
 
+// ============ АУДИО (лёгкое, без пересоздания) ============
+function getAudio(){
+  if(!state.audioCtx){
+    try{ state.audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){}
+  }
+  return state.audioCtx;
+}
+function playTick(){
+  if(!state.sound) return;
+  const ctx = getAudio(); if(!ctx) return;
+  const t = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'square';
+  osc.frequency.setValueAtTime(900, t);
+  osc.frequency.exponentialRampToValueAtTime(1400, t+0.03);
+  gain.gain.setValueAtTime(0.05, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t+0.05);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(t); osc.stop(t+0.06);
+}
+function playCoin(){
+  if(!state.sound) return;
+  const ctx = getAudio(); if(!ctx) return;
+  const t = ctx.currentTime;
+  [1200, 1800].forEach((f,i)=>{
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.value = f;
+    gain.gain.setValueAtTime(0.08, t+i*0.05);
+    gain.gain.exponentialRampToValueAtTime(0.001, t+i*0.05+0.08);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t+i*0.05); osc.stop(t+i*0.05+0.09);
+  });
+}
+function playWin(){
+  if(!state.sound) return;
+  const ctx = getAudio(); if(!ctx) return;
+  [523,659,784].forEach((f,i)=>{
+    const t = ctx.currentTime + i*0.08;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = f;
+    osc.type = 'sine';
+    gain.gain.setValueAtTime(0.15, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t+0.2);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t); osc.stop(t+0.22);
+  });
+}
+
+// ============ DEVICE / API ============
 function getDevice(){
   let id = localStorage.getItem('dev_id');
   if(!id){ id = (crypto.randomUUID?.() || Math.random().toString(36).slice(2)); localStorage.setItem('dev_id', id); }
@@ -28,10 +82,14 @@ async function api(path, body={}){
   });
   const text = await r.text();
   let json; try{ json = JSON.parse(text); }catch(e){ json = {error:text}; }
-  if(!r.ok) throw Object.assign(new Error(json.error||'err'), {status:r.status, body:json});
+  if(!r.ok){
+    if(r.status === 401) toast('⚠️ Переоткрой игру', 'pink', 3000);
+    throw Object.assign(new Error(json.error||'err'), {status:r.status, body:json});
+  }
   return json;
 }
 
+// ============ ЗАГРУЗКА ИГРОКА ============
 async function loadMe(){
   const p = await api('/api/me', {
     tgUser:{
@@ -39,8 +97,7 @@ async function loadMe(){
       first_name: tg?.initDataUnsafe?.user?.first_name
     },
     lang: tg?.initDataUnsafe?.user?.language_code?.startsWith('ru') ? 'ru'
-      : tg?.initDataUnsafe?.user?.language_code?.startsWith('es') ? 'es' : 'en',
-    refId: new URLSearchParams(location.search).get('ref')
+      : tg?.initDataUnsafe?.user?.language_code?.startsWith('es') ? 'es' : 'en'
   });
   state.player = p;
   state.balance = p.balance;
@@ -67,7 +124,8 @@ function renderHdr(){
   if(et) et.textContent = `${fmt(state.energy)} / ${fmt(state.maxEnergy)}`;
 }
 
-function toast(msg, cls='', dur=3000){
+// ============ TOAST / MODAL ============
+function toast(msg, cls='', dur=2800){
   const t = document.createElement('div');
   t.className = 'toast '+cls; t.textContent = msg;
   $('toasts').appendChild(t);
@@ -80,19 +138,23 @@ function modal(html){
 function closeModal(){ $('modalBg').classList.remove('on'); }
 $('modalBg').onclick = e => { if(e.target.id === 'modalBg') closeModal(); };
 
-// ---------- TAP (улучшенный) ----------
-const sq = $('squirrel');
+// ============ TAP (оптимизировано) ============
+const TAP_DEBOUNCE = 30;
+const SEND_INTERVAL = 250;
 let lastTapTs = 0;
-const TAP_DEBOUNCE = 40;
-const SEND_INTERVAL = 150;
+let tapFlushTimer = null;
 
-sq.addEventListener('pointerdown', e => {
-  const t = performance.now();
-  if(t - lastTapTs < TAP_DEBOUNCE) return;
-  lastTapTs = t;
+function doTap(x, y){
+  const now = performance.now();
+  if(now - lastTapTs < TAP_DEBOUNCE) return;
+  lastTapTs = now;
 
   if(state.energy <= 0){
-    toast('⚡ Энергия кончилась', 'pink', 1500);
+    const t = Date.now();
+    if(t - state.lastEnergyToast > 3000){
+      state.lastEnergyToast = t;
+      toast('⚡ Энергия кончилась', 'pink', 1500);
+    }
     return;
   }
 
@@ -100,24 +162,22 @@ sq.addEventListener('pointerdown', e => {
   state.balance += state.perClick;
   renderHdr();
 
-  spawnFloat(e.clientX, e.clientY, `+${state.perClick}`);
-  navigator.vibrate?.(8);
-  sq.classList.remove('hit'); void sq.offsetWidth; sq.classList.add('hit');
-  spawnCoinBurst(e.clientX, e.clientY);
+  spawnFloat(x, y, '+'+state.perClick);
+  spawnCoinBurst(x, y);
+  playTick();
+  navigator.vibrate?.(6);
 
   state.tapBuffer++;
-  if(!state.tapTimer) state.tapTimer = setTimeout(flushTaps, SEND_INTERVAL);
-});
+  if(!tapFlushTimer){
+    tapFlushTimer = setTimeout(flushTaps, SEND_INTERVAL);
+  }
+}
 
 async function flushTaps(){
   const count = state.tapBuffer;
   state.tapBuffer = 0;
-  state.tapTimer = null;
+  tapFlushTimer = null;
   if(count <= 0) return;
-
-  const localBal = state.balance;
-  const localEng = state.energy;
-
   try{
     const r = await api('/api/tap', {count});
     if(r.ok){
@@ -130,66 +190,62 @@ async function flushTaps(){
       renderHdr();
     }
   }catch(e){
-    if(e.status === 401){
-      console.warn('auth fail', e.message);
-      toast('⚠️ Ошибка авторизации, переоткрой игру', 'pink', 4000);
-    } else {
-      state.balance = localBal;
-      state.energy = localEng;
-      renderHdr();
-      toast('⚠️ ' + (e.message || 'Ошибка сети'), 'pink', 2500);
+    if(e.status !== 401){
+      // мягкий откат — не сбрасываем локально, просто ждём следующий запрос
+      console.warn('tap fail', e.message);
     }
   }
+}
+
+function spawnFloat(x, y, text){
+  const layer = $('floatLayer'); if(!layer) return;
+  const el = document.createElement('div');
+  el.className = 'float';
+  const r = layer.getBoundingClientRect();
+  el.style.left = (x - r.left) + 'px';
+  el.style.top = (y - r.top) + 'px';
+  el.textContent = text;
+  layer.appendChild(el);
+  setTimeout(()=>el.remove(), 950);
 }
 
 function spawnCoinBurst(x, y){
   const layer = $('floatLayer'); if(!layer) return;
   const r = layer.getBoundingClientRect();
-  for(let i=0;i<4;i++){
+  for(let i=0;i<3;i++){
     const el = document.createElement('div');
-    el.textContent = ['🪙','⭐','💰','✨'][i%4];
-    el.style.cssText = `position:absolute;font-size:14px;pointer-events:none;
-      left:${x-r.left+ (Math.random()*30-15)}px;top:${y-r.top+(Math.random()*10-5)}px;
-      animation:coinBurst .8s ease-out forwards;
-      animation-delay:${i*30}ms;`;
+    el.className = 'coin-fx';
+    el.textContent = ['🪙','⭐','✨'][i];
+    el.style.left = (x - r.left) + 'px';
+    el.style.top = (y - r.top) + 'px';
+    el.style.setProperty('--dx', (Math.random()*80-40)+'px');
+    el.style.setProperty('--dy', (-60 - Math.random()*40)+'px');
     layer.appendChild(el);
-    setTimeout(()=>el.remove(), 900);
+    setTimeout(()=>el.remove(), 850);
   }
-    }
-
-function spawnFloat(x,y,text){
-  const layer = $('floatLayer'); if(!layer) return;
-  const el = document.createElement('div');
-  el.className = 'float';
-  const r = layer.getBoundingClientRect();
-  el.style.left = (x - r.left)+'px';
-  el.style.top = (y - r.top)+'px';
-  el.textContent = text;
-  layer.appendChild(el);
-  setTimeout(()=>el.remove(), 1000);
 }
 
+// ============ КНОПКИ ШАПКИ ============
 $('bonusBtn').onclick = async ()=>{
   try{
     const r = await api('/api/bonus');
-    if(r.ok){ toast(`🎁 +${fmt(r.reward)} (серия ${r.streak})`, 'gold'); loadMe(); }
+    if(r.ok){ toast(`🎁 +${fmt(r.reward)} (серия ${r.streak})`, 'gold', 4000); loadMe(); }
     else toast(`Через ${Math.ceil(r.next/3600)}ч`);
   }catch(e){ toast('Ошибка: '+e.message); }
 };
-
 $('soundBtn').onclick = ()=>{
-  const cur = $('soundBtn').textContent === '🔊';
-  $('soundBtn').textContent = cur ? '🔇' : '🔊';
+  state.sound = !state.sound;
+  $('soundBtn').textContent = state.sound ? '🔊' : '🔇';
+  if(state.sound) playTick();
 };
 
 $('claimBtn').onclick = async ()=>{
   try{
     const r = await api('/api/passive');
-    if(r.ok){ toast(`💤 +${fmt(r.gain)}`, 'green'); loadMe(); }
+    if(r.ok){ toast(`💤 +${fmt(r.gain)}`, 'green', 3000); playCoin(); loadMe(); }
     else toast('Пока нечего собирать');
   }catch(e){ toast('Ошибка: '+e.message); }
 };
-
 $('boostBtn').onclick = async ()=>{
   try{
     await api('/api/boost-energy');
@@ -198,6 +254,7 @@ $('boostBtn').onclick = async ()=>{
   }catch(e){ toast(e.message); }
 };
 
+// ============ ТАБЫ ============
 const TABS = [
   ['home','🐿️','Игра'],
   ['cards','🏦','Карты'],
@@ -231,14 +288,22 @@ function go(tab){
   renderTab(tab);
 }
 
+// ============ КАТАЛОГ КАРТОЧЕК ============
 const CARDS_CACHE = {};
 async function loadCatalog(){
   if(CARDS_CACHE.cards) return CARDS_CACHE;
-  const r = await fetch('/api/catalog').then(r=>r.json());
-  Object.assign(CARDS_CACHE, r);
+  try{
+    const r = await fetch('/api/catalog').then(r=>r.json());
+    Object.assign(CARDS_CACHE, r);
+  }catch(e){
+    CARDS_CACHE.cards = [];
+    CARDS_CACHE.rarityMult = {common:1,rare:1.6,epic:2.4,legendary:4};
+    CARDS_CACHE.rarityColor = {common:'#a89080',rare:'#00bbf9',epic:'#8338ec',legendary:'#ffd166'};
+  }
   return CARDS_CACHE;
 }
 
+// ============ РЕНДЕР ТАБОВ ============
 async function renderTab(tab){
   const c = $('p-'+tab); if(!c) return;
   if(c.__cleanup){ c.__cleanup(); c.__cleanup = null; }
@@ -248,7 +313,7 @@ async function renderTab(tab){
     if(!CARDS_CACHE.cards) await loadCatalog();
     const cats = ['FARM','BANK','WEB3','MARKET','AIRDROP','TEAM'];
     c.innerHTML = cats.map(cat=>{
-      const cards = CARDS_CACHE.cards.filter(x=>x.category===cat);
+      const cards = (CARDS_CACHE.cards||[]).filter(x=>x.category===cat);
       if(!cards.length) return '';
       return `<div class="section-title">${cat}</div>` + cards.map(card=>{
         const owned = (p.cards||[]).find(x=>x.id===card.id);
@@ -267,13 +332,12 @@ async function renderTab(tab){
           <button data-card="${card.id}" ${dis}>${lvl>=card.max_level?'MAX':'Купить'}</button>
         </div>`;
       }).join('');
-    }).join('');
+    }).join('') || '<div class="empty"><div class="ic">🏦</div>Каталог пуст</div>';
     c.querySelectorAll('button[data-card]').forEach(btn=>{
       btn.onclick = async ()=>{
         btn.disabled = true;
-        try{ await api('/api/buy-card', {cardId:btn.dataset.card}); await loadMe(); renderTab('cards'); }
-        catch(e){ toast(e.message, 'pink'); }
-        finally{ btn.disabled = false; }
+        try{ await api('/api/buy-card', {cardId:btn.dataset.card}); playCoin(); await loadMe(); renderTab('cards'); }
+        catch(e){ toast(e.message, 'pink'); btn.disabled = false; }
       };
     });
   }
@@ -292,8 +356,8 @@ async function renderTab(tab){
         <div class="info"><div class="t">Премиум 30 дней</div>
         <div class="d">×2 тап · 30 000 🐿️</div></div>
         <button id="bPm">Купить</button></div>`;
-    $('bEn').onclick = async ()=>{ try{ await api('/api/boost-energy'); loadMe(); renderTab('boosts'); }catch(e){ toast(e.message); } };
-    $('bTb').onclick = async ()=>{ try{ await api('/api/boost-turbo'); loadMe(); renderTab('boosts'); }catch(e){ toast(e.message); } };
+    $('bEn').onclick = async ()=>{ try{ await api('/api/boost-energy'); playCoin(); loadMe(); renderTab('boosts'); }catch(e){ toast(e.message); } };
+    $('bTb').onclick = async ()=>{ try{ await api('/api/boost-turbo'); playCoin(); loadMe(); renderTab('boosts'); }catch(e){ toast(e.message); } };
     $('bPm').onclick = async ()=>{ try{ await api('/api/premium/buy',{days:30}); loadMe(); renderTab('boosts'); }catch(e){ toast(e.message); } };
   }
 
@@ -327,11 +391,11 @@ async function renderTab(tab){
           <button id="sUpg" ${s.speedLevel>=5?'disabled':''}>${s.speedLevel>=5?'MAX':'Улучшить'}</button></div>`;
       $('sStart').onclick = async ()=>{ try{ await api('/api/session/start'); renderTab('session'); }catch(e){ toast(e.message); } };
       $('sClaim').onclick = async ()=>{
-        try{ const r = await api('/api/session/claim'); toast('💤 +'+fmt(r.gain),'gold'); await loadMe(); renderTab('session'); }
+        try{ const r = await api('/api/session/claim'); toast('💤 +'+fmt(r.gain),'gold'); playCoin(); await loadMe(); renderTab('session'); }
         catch(e){ toast(e.message, 'pink'); }
       };
       $('sUpg').onclick = async ()=>{ try{ await api('/api/session/upgrade'); renderTab('session'); }catch(e){ toast(e.message); } };
-    }catch(e){ c.innerHTML = '<div class="empty">Ошибка загрузки</div>'; }
+    }catch(e){ c.innerHTML = '<div class="empty"><div class="ic">💤</div>Ошибка загрузки</div>'; }
   }
 
   else if(tab === 'duel'){
@@ -382,14 +446,14 @@ async function renderTab(tab){
           try{ await api('/api/clan/create',{name,tag}); renderTab('clan'); }
           catch(e){ toast(e.message, 'pink'); }
         };
-        const list = await fetch('/api/clan/list', {headers:{'X-Init-Data':initData}}).then(r=>r.json());
+        const list = await fetch('/api/clan/list', {headers:{'X-Init-Data':initData}}).then(r=>r.json()).catch(()=>[]);
         $('cList').innerHTML = list.length ? list.map(cl=>`
           <div class="card">
-            <div class="ic">${cl.emblem}</div>
+            <div class="ic">${cl.emblem||'🛡️'}</div>
             <div class="info"><div class="t">[${cl.tag}] ${cl.name}</div>
             <div class="d">${cl.members}/${cl.max_members} · ${fmt(cl.total_earned)}</div></div>
             <button data-join="${cl.id}">Войти</button>
-          </div>`).join('') : '<div class="empty">Пока пусто</div>';
+          </div>`).join('') : '<div class="empty"><div class="ic">🛡️</div>Пока пусто</div>';
         c.querySelectorAll('[data-join]').forEach(b=>{
           b.onclick = async ()=>{ try{ await api('/api/clan/join',{clanId:b.dataset.join}); renderTab('clan'); }
             catch(e){ toast(e.message); } };
@@ -399,7 +463,7 @@ async function renderTab(tab){
         c.innerHTML = `
           <div class="card" style="flex-direction:column;align-items:stretch">
             <div style="display:flex;gap:10px;align-items:center">
-              <div class="ic" style="font-size:40px">${cl.emblem}</div>
+              <div class="ic" style="font-size:40px">${cl.emblem||'🛡️'}</div>
               <div class="info"><div class="t">[${cl.tag}] ${cl.name}</div>
               <div class="d">${me.members.length}/${cl.max_members} · казна ${fmt(cl.treasury)}</div></div>
             </div>
@@ -425,12 +489,13 @@ async function renderTab(tab){
           await api('/api/clan/leave'); renderTab('clan');
         };
       }
-    }catch(e){ c.innerHTML = '<div class="empty">Ошибка</div>'; }
+    }catch(e){ c.innerHTML = '<div class="empty"><div class="ic">🛡️</div>Ошибка</div>'; }
   }
 
   else if(tab === 'daily'){
     try{
       const list = await fetch('/api/daily/list',{headers:{'X-Init-Data':initData}}).then(r=>r.json());
+      if(!list.length){ c.innerHTML = '<div class="empty"><div class="ic">📅</div>Нет заданий на сегодня</div>'; return; }
       c.innerHTML = list.map(q=>{
         const pct = q.goal? Math.min(100, q.progress/q.goal*100) : 0;
         const canClaim = q.done && !q.claimed;
@@ -450,16 +515,17 @@ async function renderTab(tab){
       c.querySelectorAll('[data-q]').forEach(b=>{
         b.onclick = async ()=>{
           try{ const r = await api('/api/daily/claim',{id:b.dataset.q});
-            toast('+'+fmt(r.reward), 'gold'); await loadMe(); renderTab('daily'); }
+            toast('+'+fmt(r.reward), 'gold'); playCoin(); await loadMe(); renderTab('daily'); }
           catch(e){ toast(e.message); }
         };
       });
-    }catch(e){ c.innerHTML = '<div class="empty">Ошибка</div>'; }
+    }catch(e){ c.innerHTML = '<div class="empty"><div class="ic">📅</div>Ошибка</div>'; }
   }
 
   else if(tab === 'ach'){
     try{
       const list = await fetch('/api/ach/list',{headers:{'X-Init-Data':initData}}).then(r=>r.json());
+      if(!list.length){ c.innerHTML = '<div class="empty"><div class="ic">🏅</div>Пока нет достижений</div>'; return; }
       const byCat = {};
       list.forEach(a=>{ (byCat[a.category] ||= []).push(a); });
       const tierColor = { bronze:'#cd7f32', silver:'#c0c0c0', gold:'#ffd166', platinum:'#00f5d4', diamond:'#8338ec' };
@@ -479,13 +545,13 @@ async function renderTab(tab){
               <div style="height:100%;width:${pct}%;background:${col}"></div></div>`:''}
           </div>`;
         }).join('')}`).join('');
-    }catch(e){ c.innerHTML = '<div class="empty">Ошибка</div>'; }
+    }catch(e){ c.innerHTML = '<div class="empty"><div class="ic">🏅</div>Ошибка</div>'; }
   }
 
   else if(tab === 'season'){
     try{
       const s = await fetch('/api/season/current',{headers:{'X-Init-Data':initData}}).then(r=>r.json());
-      if(!s.active){ c.innerHTML = '<div class="empty">Сезон скоро начнётся</div>'; return; }
+      if(!s.active){ c.innerHTML = '<div class="empty"><div class="ic">🏆</div>Сезон скоро начнётся</div>'; return; }
       const lb = await fetch('/api/season/leaderboard',{headers:{'X-Init-Data':initData}}).then(r=>r.json());
       const days = Math.floor(s.secondsLeft/86400), hrs = Math.floor((s.secondsLeft%86400)/3600);
       c.innerHTML = `
@@ -495,16 +561,16 @@ async function renderTab(tab){
               <div class="d">Осталось ${days}д ${hrs}ч</div></div>
             <div style="text-align:right">
               <div style="font-size:10px;color:#8888aa">Мой ранг</div>
-              <div style="font-weight:800;color:#ffd166;font-size:20px">#${s.myRank}</div>
+              <div style="font-weight:800;color:#ffd166;font-size:22px">#${s.myRank}</div>
             </div>
           </div>
-          <div style="margin-top:8px;color:#00f5d4;font-size:12px">Очки: <b>${fmt(s.myScore)}</b></div>
+          <div style="margin-top:8px;color:#00f5d4;font-size:13px">Очки: <b>${fmt(s.myScore)}</b></div>
         </div>
         <div class="section-title">Топ-50</div>
-        ${lb.map(x=>`<div class="row">
+        ${lb.length ? lb.map(x=>`<div class="row">
           <span>${x.rank<=3?['🥇','🥈','🥉'][x.rank-1]:'#'+x.rank} ${x.name}</span>
-          <span style="color:#ffd166">${fmt(x.score)}</span></div>`).join('')}`;
-    }catch(e){ c.innerHTML = '<div class="empty">Ошибка</div>'; }
+          <span style="color:#ffd166">${fmt(x.score)}</span></div>`).join('') : '<div class="empty">Пока пусто</div>'}`;
+    }catch(e){ c.innerHTML = '<div class="empty"><div class="ic">🏆</div>Ошибка</div>'; }
   }
 
   else if(tab === 'wheel'){
@@ -516,7 +582,7 @@ async function renderTab(tab){
           <div style="position:relative;width:280px;height:280px;max-width:90vw">
             <canvas id="wheelCanvas" style="width:100%;height:100%"></canvas>
             <div style="position:absolute;top:-8px;left:50%;transform:translateX(-50%);
-              font-size:26px;color:#ffd166">▼</div>
+              font-size:26px;color:#ffd166;z-index:5">▼</div>
           </div>
           <button id="spinBtn" class="qb" style="margin-top:16px;padding:14px 30px;font-size:14px;
             background:${info.ready?'linear-gradient(135deg,#ffb84d,#ff9e00)':'#333'};
@@ -531,20 +597,20 @@ async function renderTab(tab){
         try{
           const r = await api('/api/wheel/spin');
           await animateWheel(r.prize.idx, info.prizes);
-          setTimeout(()=>{ toast('🎉 '+r.msg, 'gold', 5000); loadMe(); renderTab('wheel'); }, 4200);
+          setTimeout(()=>{ toast('🎉 '+r.msg, 'gold', 5000); playWin(); loadMe(); renderTab('wheel'); }, 4200);
         }catch(e){ toast(e.message, 'pink'); $('spinBtn').disabled = false; }
       };
-    }catch(e){ c.innerHTML = '<div class="empty">Ошибка</div>'; }
+    }catch(e){ c.innerHTML = '<div class="empty"><div class="ic">🎡</div>Ошибка</div>'; }
   }
 
   else if(tab === 'promo'){
     c.innerHTML = `
       <div class="card" style="flex-direction:column;align-items:stretch">
-        <div class="t" style="margin-bottom:8px">Активировать промокод</div>
-        <input id="promoInput" placeholder="Введи код..." style="padding:12px;background:#0a0a12;
-          border:1px solid #2a2a48;border-radius:8px;color:#ffd166;font-size:15px;text-align:center;
-          font-weight:800;letter-spacing:2px;text-transform:uppercase">
-        <button id="promoBtn" class="qb" style="margin-top:10px;padding:12px;background:linear-gradient(135deg,#ffb84d,#ff9e00);color:#3a1e00;border-radius:8px">Активировать</button>
+        <div class="t" style="margin-bottom:10px">🎟️ Активировать промокод</div>
+        <input id="promoInput" placeholder="Введи код..." style="padding:14px;background:#0a0a12;
+          border:1px solid #2a2a48;border-radius:10px;color:#ffd166;font-size:16px;text-align:center;
+          font-weight:800;letter-spacing:3px;text-transform:uppercase">
+        <button id="promoBtn" class="qb" style="margin-top:12px;padding:14px;background:linear-gradient(135deg,#ffb84d,#ff9e00);color:#3a1e00;border-radius:10px">Активировать</button>
       </div>`;
     $('promoBtn').onclick = async ()=>{
       const code = $('promoInput').value.trim();
@@ -552,8 +618,9 @@ async function renderTab(tab){
       try{
         const r = await api('/api/promo/redeem', {code});
         toast(`✅ +${fmt(r.reward)} (${r.kind})`, 'gold', 5000);
+        playWin();
         await loadMe();
-      }catch(e){ toast('Ошибка: '+e.message, 'pink'); }
+      }catch(e){ toast('Ошибка: '+e.message, 'pink', 3500); }
     };
   }
 
@@ -561,14 +628,14 @@ async function renderTab(tab){
     try{
       const r = await api('/api/ref/stats');
       const me = tg?.initDataUnsafe?.user;
-      const botUsername = (window.__BOT_USERNAME__) || 'your_bot';
+      const botUsername = (window.__BOT_USERNAME__) || 'SquirrelKombat_bot';
       const link = `https://t.me/${botUsername}?start=ref_${me?.id||''}`;
       c.innerHTML = `
         <div class="card" style="flex-direction:column;align-items:stretch">
-          <div class="t" style="margin-bottom:6px">🔗 Твоя ссылка</div>
+          <div class="t" style="margin-bottom:8px">🔗 Твоя ссылка</div>
           <div style="font-size:11px;color:#8888aa;word-break:break-all;background:#0a0a12;
-            padding:8px;border-radius:6px">${link}</div>
-          <button id="refCopy" class="qb" style="margin-top:8px">Скопировать</button>
+            padding:10px;border-radius:8px">${link}</div>
+          <button id="refCopy" class="qb" style="margin-top:10px">Скопировать</button>
         </div>
         <div class="card" style="flex-direction:column;align-items:stretch">
           <div class="t" style="margin-bottom:8px">💰 Заработано с сети</div>
@@ -580,7 +647,7 @@ async function renderTab(tab){
             <div><div style="font-size:10px;color:#8888aa">Ур. 3 (2%)</div>
               <div style="font-weight:800;color:#ffd166">${fmt(r.earned[3]||0)}</div></div>
           </div>
-          <div style="margin-top:10px;text-align:center;color:#00f5d4;font-size:12px">
+          <div style="margin-top:10px;text-align:center;color:#00f5d4;font-size:13px">
             Всего: <b>${fmt(r.totalEarned)}</b> 🐿️</div>
         </div>
         <div class="card" style="flex-direction:column;align-items:stretch">
@@ -590,13 +657,13 @@ async function renderTab(tab){
           </div>
         </div>`;
       $('refCopy').onclick = ()=>{ navigator.clipboard?.writeText(link); toast('Скопировано','green'); };
-    }catch(e){ c.innerHTML = '<div class="empty">Ошибка</div>'; }
+    }catch(e){ c.innerHTML = '<div class="empty"><div class="ic">🔗</div>Ошибка</div>'; }
   }
 
   else if(tab === 'refcontest'){
     try{
       const s = await fetch('/api/ref-contest/current',{headers:{'X-Init-Data':initData}}).then(r=>r.json());
-      if(!s.active){ c.innerHTML = '<div class="empty">Турнир скоро</div>'; return; }
+      if(!s.active){ c.innerHTML = '<div class="empty"><div class="ic">🥇</div>Турнир скоро начнётся</div>'; return; }
       const lb = await fetch('/api/ref-contest/leaderboard',{headers:{'X-Init-Data':initData}}).then(r=>r.json());
       const days = Math.floor(s.secondsLeft/86400), hrs = Math.floor((s.secondsLeft%86400)/3600);
       c.innerHTML = `
@@ -606,15 +673,15 @@ async function renderTab(tab){
               <div class="d">Приз: ${fmt(s.prizePool)} · ${days}д ${hrs}ч</div></div>
             <div style="text-align:right">
               <div style="font-size:10px;color:#8888aa">Мой ранг</div>
-              <div style="font-weight:800;color:#ffd166;font-size:20px">#${s.myRank}</div>
+              <div style="font-weight:800;color:#ffd166;font-size:22px">#${s.myRank}</div>
             </div>
           </div>
         </div>
         <div class="section-title">Топ-50</div>
-        ${lb.map(x=>`<div class="row">
+        ${lb.length ? lb.map(x=>`<div class="row">
           <span>${x.rank<=3?['🥇','🥈','🥉'][x.rank-1]:'#'+x.rank} ${x.name}</span>
-          <span style="color:#ffd166">${x.score}</span></div>`).join('')}`;
-    }catch(e){ c.innerHTML = '<div class="empty">Ошибка</div>'; }
+          <span style="color:#ffd166">${x.score}</span></div>`).join('') : '<div class="empty">Пока пусто</div>'}`;
+    }catch(e){ c.innerHTML = '<div class="empty"><div class="ic">🥇</div>Ошибка</div>'; }
   }
 
   else if(tab === 'channel'){
@@ -623,15 +690,15 @@ async function renderTab(tab){
       if(!m.has){
         c.innerHTML = `
           <div class="card" style="flex-direction:column;align-items:stretch">
-            <div class="t" style="margin-bottom:8px">📢 Стать партнёром</div>
-            <div style="font-size:12px;color:#8888aa;margin-bottom:10px">
+            <div class="t" style="margin-bottom:10px">📢 Стать партнёром</div>
+            <div style="font-size:12px;color:#8888aa;margin-bottom:12px">
               Владеешь каналом? Получай 15% пожизненно с каждого игрока.
             </div>
-            <input id="chTitle" placeholder="Название канала" style="padding:10px;background:#0a0a12;
-              border:1px solid #2a2a48;border-radius:6px;color:#eaeaf5;font-size:13px;margin-bottom:8px">
-            <input id="chUser" placeholder="@username (без @)" style="padding:10px;background:#0a0a12;
-              border:1px solid #2a2a48;border-radius:6px;color:#eaeaf5;font-size:13px;margin-bottom:10px">
-            <button id="chCreate" class="qb" style="padding:12px;background:linear-gradient(135deg,#ffb84d,#ff9e00);color:#3a1e00">Создать</button>
+            <input id="chTitle" placeholder="Название канала" style="padding:12px;background:#0a0a12;
+              border:1px solid #2a2a48;border-radius:8px;color:#eaeaf5;font-size:13px;margin-bottom:10px">
+            <input id="chUser" placeholder="@username (без @)" style="padding:12px;background:#0a0a12;
+              border:1px solid #2a2a48;border-radius:8px;color:#eaeaf5;font-size:13px;margin-bottom:12px">
+            <button id="chCreate" class="qb" style="padding:14px;background:linear-gradient(135deg,#ffb84d,#ff9e00);color:#3a1e00">Создать</button>
           </div>`;
         $('chCreate').onclick = async ()=>{
           try{ await api('/api/channel/create',{title:$('chTitle').value,username:$('chUser').value}); renderTab('channel'); }
@@ -644,16 +711,19 @@ async function renderTab(tab){
             <div class="t">${ch.title}</div>
             <div class="d">@${ch.username} · ${(ch.rate*100).toFixed(0)}%</div>
             <div style="font-size:11px;color:#8888aa;word-break:break-all;margin-top:8px;
-              background:#0a0a12;padding:8px;border-radius:6px">${ch.link}</div>
-            <button id="chCopy" class="qb" style="margin-top:8px">Скопировать</button>
+              background:#0a0a12;padding:10px;border-radius:8px">${ch.link}</div>
+            <button id="chCopy" class="qb" style="margin-top:10px">Скопировать</button>
           </div>
           <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
-            <div class="card"><div><div class="d">Пришло</div>
-              <div style="font-weight:800;color:#ffd166;font-size:18px">${fmt(ch.signups)}</div></div></div>
-            <div class="card"><div><div class="d">Заработано</div>
-              <div style="font-weight:800;color:#ffd166;font-size:18px">${fmt(ch.earnings)}</div></div></div>
-            <div class="card"><div><div class="d">Баланс</div>
-              <div style="font-weight:800;color:#00f5d4;font-size:18px">${fmt(ch.balance)}</div></div></div>
+            <div class="card" style="flex-direction:column;align-items:center;text-align:center">
+              <div class="d">Пришло</div>
+              <div style="font-weight:800;color:#ffd166;font-size:20px">${fmt(ch.signups)}</div></div>
+            <div class="card" style="flex-direction:column;align-items:center;text-align:center">
+              <div class="d">Заработано</div>
+              <div style="font-weight:800;color:#ffd166;font-size:20px">${fmt(ch.earnings)}</div></div>
+            <div class="card" style="flex-direction:column;align-items:center;text-align:center">
+              <div class="d">Баланс</div>
+              <div style="font-weight:800;color:#00f5d4;font-size:20px">${fmt(ch.balance)}</div></div>
           </div>
           <div class="card"><div class="ic">💸</div>
             <div class="info"><div class="t">Вывод</div><div class="d">Мин. 10 000</div></div>
@@ -666,19 +736,19 @@ async function renderTab(tab){
           catch(e){ toast(e.message, 'pink'); }
         };
       }
-    }catch(e){ c.innerHTML = '<div class="empty">Ошибка</div>'; }
+    }catch(e){ c.innerHTML = '<div class="empty"><div class="ic">📢</div>Ошибка</div>'; }
   }
 
   else if(tab === 'top'){
     try{
       const list = await fetch('/api/top').then(r=>r.json());
-      c.innerHTML = list.map((p,i)=>
+      c.innerHTML = list.length ? list.map((p,i)=>
         `<div class="card">
           <div class="ic">${['🥇','🥈','🥉'][i]||i+1}</div>
           <div class="info"><div class="t">${p.first_name||'Игрок'}</div>
           <div class="d">${fmt(p.total_earned)} · лига ${p.league||1}</div></div>
-        </div>`).join('');
-    }catch(e){ c.innerHTML = '<div class="empty">Ошибка</div>'; }
+        </div>`).join('') : '<div class="empty"><div class="ic">👑</div>Пока пусто</div>';
+    }catch(e){ c.innerHTML = '<div class="empty"><div class="ic">👑</div>Ошибка</div>'; }
   }
 
   else if(tab === 'profile'){
@@ -696,11 +766,11 @@ async function renderTab(tab){
       <div class="row"><span>Баланс</span><b style="color:#ffd166">${fmt(state.balance)}</b></div>
       <div class="row"><span>В час</span><b>${fmt(state.perHour)}</b></div>
       <div class="row"><span>За тап</span><b>${state.perClick}</b></div>
-      <div class="row"><span>Игр</span><b>${p.hands||0}</b></div>
-      <div class="row"><span>Лучший выигрыш</span><b style="color:#ffd166">${fmt(p.best_win||0)}</b></div>
+      <div class="row"><span>Всего тапов</span><b>${fmt(p.total_taps||0)}</b></div>
+      <div class="row"><span>Всего заработано</span><b style="color:#ffd166">${fmt(p.total_earned||0)}</b></div>
       <div class="row"><span>PvP</span><b>${p.pvp_wins||0}W / ${p.pvp_losses||0}L</b></div>
       <div class="row"><span>Рефералов</span><b>${p.referrals||0}</b></div>
-      <button id="langBtn" class="qb" style="margin-top:14px;padding:12px">🌐 Сменить язык</button>`;
+      <button id="langBtn" class="qb" style="margin-top:14px;padding:14px">🌐 Сменить язык</button>`;
     $('langBtn').onclick = async ()=>{
       const l = prompt('ru / en / es', p.lang||'ru');
       if(!l) return;
@@ -708,61 +778,26 @@ async function renderTab(tab){
       catch(e){ toast(e.message); }
     };
   }
-
-  else if(tab === 'tasks'){
-    c.innerHTML = `
-      <div class="card"><div class="ic">📢</div>
-        <div class="info"><div class="t">Подписаться на канал</div><div class="d">+25 000</div></div>
-        <button data-task="join_channel">Проверить</button></div>
-      <div class="card"><div class="ic">👥</div>
-        <div class="info"><div class="t">Пригласить 3 друзей</div><div class="d">+50 000</div></div>
-        <button data-task="invite_3">Проверить</button></div>`;
-    c.querySelectorAll('[data-task]').forEach(b=>{
-      b.onclick = async ()=>{
-        b.disabled = true;
-        try{ const r = await api('/api/complete-task',{taskId:b.dataset.task}); toast('+'+fmt(r.reward), 'gold'); await loadMe(); }
-        catch(e){ toast(e.message); }
-        finally{ b.disabled = false; }
-      };
-    });
-  }
-
-  else if(tab === 'league'){
-    try{
-      const l = await api('/api/league');
-      c.innerHTML = `
-        <div class="card">
-          <div class="ic">🏆</div>
-          <div class="info">
-            <div class="t">Лига ${l.league}/10</div>
-            <div class="d">${fmt(l.total)} / ${fmt(l.nextThreshold)}</div>
-            <div style="margin-top:6px;height:6px;background:#0a0a12;border-radius:3px;overflow:hidden">
-              <div style="height:100%;width:${(l.progress*100).toFixed(1)}%;background:linear-gradient(90deg,#ffb84d,#ff9e00)"></div>
-            </div>
-          </div>
-        </div>`;
-    }catch(e){ c.innerHTML = '<div class="empty">Ошибка</div>'; }
-  }
 }
 
+// ============ DUEL GAME ============
 async function renderDuelGame(c){
   const id = state.activeDuel; if(!id) return;
   c.innerHTML = `
     <div class="card" style="flex-direction:column;align-items:stretch">
-      <div style="display:flex;justify-content:space-between;font-weight:800">
+      <div style="display:flex;justify-content:space-between;font-weight:800;font-size:15px">
         <div>Соперник: <span id="dOpp">0</span></div>
         <div style="color:#ffd166" id="dTime">Ожидание…</div>
       </div>
-      <div style="text-align:center;font-size:80px;margin:16px 0;cursor:pointer" id="dSq">🐿️</div>
-      <div style="display:flex;justify-content:space-between;font-weight:800">
+      <div style="text-align:center;font-size:90px;margin:16px 0;cursor:pointer;
+        user-select:none;touch-action:none" id="dSq">🐿️</div>
+      <div style="display:flex;justify-content:space-between;font-weight:800;font-size:15px">
         <div>Ты: <span id="dMy">0</span></div>
         <div style="color:#00f5d4" id="dStat">Ждём...</div>
       </div>
     </div>
-    <button id="dLeave" class="qb" style="padding:14px">Выйти</button>`;
-
+    <button id="dLeave" class="qb" style="padding:16px">Выйти</button>`;
   let your = null, running = false, finished = false, tapBuf = 0, tapTimer = null;
-
   const refresh = async ()=>{
     try{
       const s = await api('/api/duel/poll', {id});
@@ -787,31 +822,31 @@ async function renderDuelGame(c){
       } else if(!s.started){
         $('dTime').textContent = 'Ожидание';
       }
-    }catch(e){ console.warn('poll', e.message); }
+    }catch(e){}
   };
-
   const sendTap = async ()=>{
     const n = tapBuf; tapBuf = 0; tapTimer = null;
     if(!n) return;
     try{ await api('/api/duel/tap', {id, count:n}); }catch(e){}
   };
-
-  $('dSq').onpointerdown = ()=>{
+  const sq = $('dSq');
+  sq.addEventListener('pointerdown', ()=>{
     if(!running) return;
     $('dMy').textContent = (+$('dMy').textContent||0) + 1;
     tapBuf++;
+    playTick();
+    navigator.vibrate?.(6);
     if(!tapTimer) tapTimer = setTimeout(sendTap, 200);
-    navigator.vibrate?.(8);
-  };
+  });
   $('dLeave').onclick = ()=>{ state.activeDuel = null; renderTab('duel'); };
-
   const iv = setInterval(refresh, 700);
   c.__cleanup = ()=>clearInterval(iv);
   refresh();
 }
 
+// ============ WHEEL CANVAS ============
 function drawWheel(prizes){
-  const cv = $('wheelCanvas'); if(!cv) return;
+  const cv = $('wheelCanvas'); if(!cv || !prizes) return;
   const dpr = devicePixelRatio||1;
   const S = cv.clientWidth;
   cv.width = S*dpr; cv.height = S*dpr;
@@ -858,6 +893,7 @@ function animateWheel(targetIdx, prizes){
   });
 }
 
+// ============ BOOT ============
 (async ()=>{
   buildTabs();
   try{
@@ -872,4 +908,5 @@ function animateWheel(targetIdx, prizes){
     if(l){ l.classList.add('off'); setTimeout(()=>l.remove(), 700); }
   }, 400);
   go('home');
+  initSquirrel3D();
 })();
