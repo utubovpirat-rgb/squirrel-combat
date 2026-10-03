@@ -1,6 +1,5 @@
 // server.js — Express API + Telegram webhook
 import express from 'express';
-import express from 'express';
 import cors from 'cors';
 import 'dotenv/config';
 import path from 'path';
