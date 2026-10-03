@@ -20,12 +20,10 @@ app.use(express.static(path.join(__dirname,'public')));
 
 const now = ()=>Math.floor(Date.now()/1000);
 
-// Безопасный вызов RPC — не роняет сервер, если таблица или функция недоступны
 async function safeRpc(name, params){
-  try{ await sbAdmin.rpc(name, params); }catch(e){ /* тихо */ }
+  try{ await sbAdmin.rpc(name, params); }catch(e){ }
 }
 
-// ---------- AUTH ----------
 function verifyInitData(initData){
   try{
     const params = new URLSearchParams(initData);
@@ -63,7 +61,6 @@ function adminOnly(req,res,next){
   next();
 }
 
-// ---------- HELPERS ----------
 function regenEnergy(p){
   const t = now();
   const dt = t - (p.last_energy_ts||t);
@@ -99,7 +96,7 @@ async function bumpQuest(tgId, kind, amount=1){
       await sbAdmin.from('daily_quests').update({progress:newP})
         .eq('tg_id', tgId).eq('day', day).eq('quest_id', q.quest_id);
     }
-  }catch(e){ /* тихо */ }
+  }catch(e){ }
 }
 
 async function payChannel(tgId, amount){
@@ -113,10 +110,9 @@ async function payChannel(tgId, amount){
     await sbAdmin.from('channels').update({
       balance: (ch.balance||0) + cut, earnings: (ch.earnings||0) + cut
     }).eq('id', ch.id);
-  }catch(e){ /* тихо */ }
+  }catch(e){ }
 }
 
-// ---------- /api/me ----------
 app.post('/api/me', auth, async (req,res)=>{
   try{
     let p = await DB.getPlayer(req.tgId);
@@ -144,7 +140,6 @@ app.post('/api/me', auth, async (req,res)=>{
   }
 });
 
-// ---------- TAP ----------
 app.post('/api/tap', auth, async (req,res)=>{
   try{
     const count = Math.max(1, Math.min(20, parseInt(req.body.count) || 1));
@@ -176,7 +171,6 @@ app.post('/api/tap', auth, async (req,res)=>{
     });
     await DB.logClicks(req.tgId, spent);
 
-    // фоновые задачи — не блокируют ответ
     bumpQuest(req.tgId, 'taps', spent);
     safeRpc('pay_referrals', { p_from:req.tgId, p_amount:gain, p_source:'tap' });
     payChannel(req.tgId, gain);
@@ -188,7 +182,6 @@ app.post('/api/tap', auth, async (req,res)=>{
   }
 });
 
-// ---------- PASSIVE ----------
 app.post('/api/passive', auth, async (req,res)=>{
   try{
     const p = await DB.getPlayer(req.tgId);
@@ -214,7 +207,6 @@ app.post('/api/passive', auth, async (req,res)=>{
   }
 });
 
-// ---------- BONUS ----------
 app.post('/api/bonus', auth, async (req,res)=>{
   try{
     const p = await DB.getPlayer(req.tgId);
@@ -235,7 +227,6 @@ app.post('/api/bonus', auth, async (req,res)=>{
   }
 });
 
-// ---------- CATALOG ----------
 let CARDS_CACHE = null, CARDS_CACHE_TS = 0;
 async function loadCatalog(){
   if(CARDS_CACHE && Date.now() - CARDS_CACHE_TS < 60000) return CARDS_CACHE;
@@ -297,7 +288,6 @@ app.post('/api/buy-card', auth, async (req,res)=>{
   }
 });
 
-// ---------- BOOSTS ----------
 app.post('/api/boost-energy', auth, async (req,res)=>{
   try{
     const p = await DB.getPlayer(req.tgId);
@@ -326,7 +316,6 @@ app.post('/api/boost-turbo', auth, async (req,res)=>{
   }
 });
 
-// ---------- TASKS ----------
 app.post('/api/complete-task', auth, async (req,res)=>{
   try{
     const taskId = String(req.body.taskId||'');
@@ -341,7 +330,7 @@ app.post('/api/complete-task', auth, async (req,res)=>{
     }
     if(taskId === 'join_channel'){
       try{
-        const member = await bot.api.getChatMember('@your_channel', req.tgId);
+        const member = await bot.api.getChatMember('@squirrel_combat_news', req.tgId);
         if(!['member','administrator','creator'].includes(member.status))
           return res.status(400).json({error:'not subscribed'});
       }catch(e){}
@@ -359,7 +348,6 @@ app.post('/api/complete-task', auth, async (req,res)=>{
   }
 });
 
-// ---------- LEAGUE ----------
 app.get('/api/league', auth, async (req,res)=>{
   try{
     const p = await DB.getPlayer(req.tgId);
@@ -378,7 +366,6 @@ app.get('/api/league', auth, async (req,res)=>{
   }
 });
 
-// ---------- TOP ----------
 let TOP_CACHE = null, TOP_CACHE_TS = 0;
 app.get('/api/top', async (_, res)=>{
   try{
@@ -392,7 +379,6 @@ app.get('/api/top', async (_, res)=>{
   }
 });
 
-// ---------- DUEL ----------
 app.post('/api/duel/create', auth, async (req,res)=>{
   try{
     const stake = Math.max(1000, Math.min(1e6, parseInt(req.body.stake)||1000));
@@ -498,7 +484,6 @@ app.post('/api/duel/tap', auth, async (req,res)=>{
   }
 });
 
-// ---------- PREMIUM ----------
 app.post('/api/premium/buy', auth, async (req,res)=>{
   try{
     const days = Math.max(1, Math.min(365, parseInt(req.body.days)||30));
@@ -516,7 +501,6 @@ app.post('/api/premium/buy', auth, async (req,res)=>{
   }
 });
 
-// ---------- SESSION ----------
 const SESSION_TIERS = [
   {lvl:1, sec:10800, mult:1.0},
   {lvl:2, sec:10800, mult:1.3, cost:25000},
@@ -603,7 +587,6 @@ app.post('/api/session/upgrade', auth, async (req,res)=>{
   }
 });
 
-// ---------- DAILY QUESTS ----------
 async function ensureDailyQuests(tgId){
   const day = todayUTC();
   const { data: existing } = await sbAdmin.from('daily_quests')
@@ -664,7 +647,6 @@ app.post('/api/daily/claim', auth, async (req,res)=>{
   }
 });
 
-// ---------- ACHIEVEMENTS ----------
 app.get('/api/ach/list', auth, async (req,res)=>{
   try{
     const lang = (await DB.getPlayer(req.tgId))?.lang || 'ru';
@@ -702,7 +684,6 @@ app.get('/api/ach/list', auth, async (req,res)=>{
   }
 });
 
-// ---------- SEASONS ----------
 async function currentSeason(){
   const t = now();
   const { data } = await sbAdmin.from('seasons').select('*').eq('status','active')
@@ -752,7 +733,6 @@ app.get('/api/season/leaderboard', auth, async (req,res)=>{
   }
 });
 
-// ---------- WHEEL ----------
 const WHEEL_PRIZES = [
   {idx:0, type:'coins', value:1000, label:'1 000', color:'#8338ec', weight:20},
   {idx:1, type:'coins', value:5000, label:'5 000', color:'#00bbf9', weight:18},
@@ -829,7 +809,6 @@ app.post('/api/wheel/spin', auth, async (req,res)=>{
   }
 });
 
-// ---------- PROMO ----------
 app.post('/api/promo/redeem', auth, async (req,res)=>{
   try{
     const code = String(req.body.code||'').trim().toUpperCase();
@@ -864,7 +843,6 @@ app.post('/api/promo/redeem', auth, async (req,res)=>{
   }
 });
 
-// ---------- LANG ----------
 app.post('/api/lang/set', auth, async (req,res)=>{
   try{
     const lang = ['ru','en','es'].includes(req.body.lang)?req.body.lang:'ru';
@@ -876,7 +854,6 @@ app.post('/api/lang/set', auth, async (req,res)=>{
   }
 });
 
-// ---------- CLAN ----------
 app.post('/api/clan/create', auth, async (req,res)=>{
   try{
     const name = String(req.body.name||'').trim().slice(0,30);
@@ -982,7 +959,6 @@ app.post('/api/clan/donate', auth, async (req,res)=>{
   }
 });
 
-// ---------- REF ----------
 app.post('/api/ref/stats', auth, async (req,res)=>{
   try{
     const p = await DB.getPlayer(req.tgId);
@@ -1009,7 +985,6 @@ app.post('/api/ref/stats', auth, async (req,res)=>{
   }
 });
 
-// ---------- REF CONTEST ----------
 async function currentRefContest(){
   const { data } = await sbAdmin.from('ref_contests').select('*').eq('status','active').maybeSingle();
   return data;
@@ -1050,7 +1025,6 @@ app.get('/api/ref-contest/leaderboard', auth, async (req,res)=>{
   }
 });
 
-// ---------- CHANNEL ----------
 app.post('/api/channel/create', auth, async (req,res)=>{
   try{
     const title = String(req.body.title||'').trim().slice(0,60);
@@ -1101,7 +1075,6 @@ app.post('/api/channel/withdraw', auth, async (req,res)=>{
   }
 });
 
-// ---------- ADMIN ----------
 app.get('/api/admin/stats', auth, adminOnly, async (req,res)=>{
   try{
     const dayAgo = now() - 86400;
@@ -1178,7 +1151,6 @@ app.get('/api/admin/export/:type', auth, adminOnly, async (req,res)=>{
   }
 });
 
-// ---------- PUBLIC ----------
 let PUB_CACHE = null, PUB_TS = 0;
 app.get('/api/public/stats', async (_,res)=>{
   try{
@@ -1199,10 +1171,8 @@ app.get('/api/public/stats', async (_,res)=>{
   }
 });
 
-// ---------- STATIC ----------
 app.get('/', (_,res)=>res.sendFile(path.join(__dirname,'public','index.html')));
 
-// ---------- WEBHOOK ----------
 app.post(`/bot${process.env.BOT_TOKEN}`, (req,res)=>{
   try{
     return webhookCallback(bot, 'express')(req,res);
@@ -1212,7 +1182,6 @@ app.post(`/bot${process.env.BOT_TOKEN}`, (req,res)=>{
   }
 });
 
-// ---------- CRON ----------
 setInterval(async ()=>{
   try{ await sbAdmin.rpc('snapshot_daily'); }catch(e){}
 }, 15*60000);
@@ -1249,7 +1218,6 @@ setInterval(async ()=>{
   }catch(e){}
 }, 60000);
 
-// ---------- START ----------
 app.listen(PORT, async ()=>{
   console.log(`🐿️ Squirrel Combat online on ${PORT}`);
   const url = `${process.env.WEBAPP_URL}/bot${process.env.BOT_TOKEN}`;
@@ -1273,6 +1241,6 @@ app.listen(PORT, async ()=>{
         await bot.api.setWebhook(url, { drop_pending_updates:false });
         console.log('✅ Webhook восстановлен');
       }
-    }catch(e){ /* тихо */ }
+    }catch(e){ }
   }, 5*60000);
 });
