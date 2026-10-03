@@ -275,134 +275,159 @@ function spawnCoinBurst(x, y){
   }
 }
 
-// ============ 3D-БЕЛКА SVG ============
+// ============ 3D-БЕЛКА (Three.js + belka.glb) ============
+const SQUIRREL_MODEL_URL = 'https://github.com/utubovpirat-rgb/squirrel-combat/releases/download/v1/belka.glb';
+
+let squirrelScene = null;
+let squirrelCamera = null;
+let squirrelRenderer = null;
+let squirrelModel = null;
+let squirrelMixer = null;
+
 function initSquirrel3D(){
   const wrap = document.querySelector('.squirrel-wrap');
   if(!wrap) return;
 
   wrap.innerHTML = `
-    <svg id="squirrelSvg" viewBox="0 0 260 260" xmlns="http://www.w3.org/2000/svg"
-      style="width:100%;max-width:320px;height:auto;display:block;
-      filter:drop-shadow(0 18px 30px rgba(255,180,80,.4));
-      transform-style:preserve-3d;will-change:transform;">
-      <defs>
-        <radialGradient id="bodyGrad" cx="45%" cy="35%" r="65%">
-          <stop offset="0%" stop-color="#d9a86c"/>
-          <stop offset="60%" stop-color="#b07f45"/>
-          <stop offset="100%" stop-color="#7a5328"/>
-        </radialGradient>
-        <radialGradient id="bellyGrad" cx="50%" cy="40%" r="60%">
-          <stop offset="0%" stop-color="#ffeac8"/>
-          <stop offset="100%" stop-color="#e8c79a"/>
-        </radialGradient>
-        <radialGradient id="tailGrad" cx="40%" cy="30%" r="70%">
-          <stop offset="0%" stop-color="#c99b5f"/>
-          <stop offset="60%" stop-color="#a06f35"/>
-          <stop offset="100%" stop-color="#6b3f18"/>
-        </radialGradient>
-        <radialGradient id="earGrad" cx="40%" cy="30%" r="70%">
-          <stop offset="0%" stop-color="#e8b878"/>
-          <stop offset="100%" stop-color="#9c6828"/>
-        </radialGradient>
-        <radialGradient id="nutGrad" cx="40%" cy="30%" r="60%">
-          <stop offset="0%" stop-color="#e08a3a"/>
-          <stop offset="60%" stop-color="#a55b1e"/>
-          <stop offset="100%" stop-color="#6b3510"/>
-        </radialGradient>
-        <radialGradient id="eyeGrad" cx="35%" cy="35%" r="60%">
-          <stop offset="0%" stop-color="#ffffff"/>
-          <stop offset="100%" stop-color="#eaeaf5"/>
-        </radialGradient>
-        <radialGradient id="eyeGlow" cx="35%" cy="35%" r="60%">
-          <stop offset="0%" stop-color="#0a0a12"/>
-          <stop offset="100%" stop-color="#000000"/>
-        </radialGradient>
-      </defs>
-
-      <!-- ХВОСТ (сзади) -->
-      <g id="tail">
-        <path d="M 170 165 Q 240 130 235 75 Q 232 35 200 30 Q 175 28 175 55 Q 178 90 155 120 Z"
-          fill="url(#tailGrad)" stroke="#5a3413" stroke-width="2"/>
-        <path d="M 195 55 Q 205 50 210 62 Q 208 80 190 95"
-          fill="none" stroke="#e8c79a" stroke-width="3" opacity=".5"/>
-      </g>
-
-      <!-- ТЕЛО -->
-      <ellipse id="body" cx="130" cy="170" rx="62" ry="55" fill="url(#bodyGrad)" stroke="#5a3413" stroke-width="2.5"/>
-      <ellipse cx="130" cy="180" rx="42" ry="38" fill="url(#bellyGrad)" opacity=".95"/>
-
-      <!-- ЛАПЫ -->
-      <ellipse cx="105" cy="215" rx="18" ry="10" fill="#7a5328" stroke="#4a2a10" stroke-width="2"/>
-      <ellipse cx="155" cy="215" rx="18" ry="10" fill="#7a5328" stroke="#4a2a10" stroke-width="2"/>
-
-      <!-- ОРЕХ В ЛАПАХ -->
-      <g id="nut">
-        <ellipse cx="130" cy="200" rx="20" ry="18" fill="url(#nutGrad)" stroke="#4a2a10" stroke-width="2"/>
-        <path d="M 120 195 Q 130 185 140 195 Q 130 205 120 195 Z" fill="#c47330" opacity=".7"/>
-        <line x1="130" y1="182" x2="130" y2="192" stroke="#4a2a10" stroke-width="1.5" opacity=".6"/>
-      </g>
-
-      <!-- ЛАПКИ ПЕРЕД ОРЕХОМ -->
-      <ellipse cx="112" cy="195" rx="9" ry="7" fill="#e8b878" stroke="#5a3413" stroke-width="1.5"/>
-      <ellipse cx="148" cy="195" rx="9" ry="7" fill="#e8b878" stroke="#5a3413" stroke-width="1.5"/>
-
-      <!-- УШИ -->
-      <path d="M 88 115 Q 82 75 100 68 Q 112 72 112 105 Z"
-        fill="url(#earGrad)" stroke="#5a3413" stroke-width="2"/>
-      <path d="M 172 115 Q 178 75 160 68 Q 148 72 148 105 Z"
-        fill="url(#earGrad)" stroke="#5a3413" stroke-width="2"/>
-      <path d="M 92 108 Q 88 82 100 78 Q 106 82 104 104 Z" fill="#3a1e0a" opacity=".5"/>
-      <path d="M 168 108 Q 172 82 160 78 Q 154 82 156 104 Z" fill="#3a1e0a" opacity=".5"/>
-
-      <!-- ГОЛОВА -->
-      <ellipse id="head" cx="130" cy="125" rx="52" ry="48" fill="url(#bodyGrad)" stroke="#5a3413" stroke-width="2.5"/>
-      <ellipse cx="130" cy="138" rx="32" ry="26" fill="url(#bellyGrad)" opacity=".8"/>
-
-      <!-- ГЛАЗА -->
-      <g id="eyeL">
-        <ellipse cx="112" cy="120" rx="11" ry="13" fill="url(#eyeGrad)" stroke="#3a1e0a" stroke-width="1.5"/>
-        <ellipse id="pupilL" cx="113" cy="122" rx="6" ry="8" fill="url(#eyeGlow)"/>
-        <ellipse cx="110" cy="117" rx="2.5" ry="2.5" fill="#fff" opacity=".9"/>
-      </g>
-      <g id="eyeR">
-        <ellipse cx="148" cy="120" rx="11" ry="13" fill="url(#eyeGrad)" stroke="#3a1e0a" stroke-width="1.5"/>
-        <ellipse id="pupilR" cx="147" cy="122" rx="6" ry="8" fill="url(#eyeGlow)"/>
-        <ellipse cx="144" cy="117" rx="2.5" ry="2.5" fill="#fff" opacity=".9"/>
-      </g>
-
-      <!-- БРОВКИ -->
-      <path d="M 100 105 Q 110 100 120 105" fill="none" stroke="#5a3413" stroke-width="2" stroke-linecap="round"/>
-      <path d="M 140 105 Q 150 100 160 105" fill="none" stroke="#5a3413" stroke-width="2" stroke-linecap="round"/>
-
-      <!-- НОС -->
-      <ellipse cx="130" cy="138" rx="7" ry="5" fill="#3a1e0a"/>
-      <ellipse cx="128" cy="137" rx="2" ry="1.5" fill="#7a5328" opacity=".7"/>
-
-      <!-- РОТ -->
-      <path d="M 122 146 Q 130 152 138 146" fill="none" stroke="#3a1e0a" stroke-width="2" stroke-linecap="round"/>
-
-      <!-- УСИКИ -->
-      <line x1="115" y1="140" x2="98" y2="136" stroke="#5a3413" stroke-width="1.5" stroke-linecap="round"/>
-      <line x1="115" y1="143" x2="97" y2="143" stroke="#5a3413" stroke-width="1.5" stroke-linecap="round"/>
-      <line x1="145" y1="140" x2="162" y2="136" stroke="#5a3413" stroke-width="1.5" stroke-linecap="round"/>
-      <line x1="145" y1="143" x2="163" y2="143" stroke="#5a3413" stroke-width="1.5" stroke-linecap="round"/>
-
-      <!-- ЩЁКИ-РУМЯНЕЦ -->
-      <ellipse cx="100" cy="140" rx="8" ry="5" fill="#ff9e9e" opacity=".35"/>
-      <ellipse cx="160" cy="140" rx="8" ry="5" fill="#ff9e9e" opacity=".35"/>
-    </svg>
-
+    <canvas id="squirrel3dCanvas" style="
+      width:100%; max-width:340px; height:340px;
+      display:block; touch-action:none; cursor:grab;
+      filter:drop-shadow(0 22px 36px rgba(255,180,80,.45));
+    "></canvas>
     <div id="floatLayer"></div>
     <div class="hint">↔ Поверни пальцем</div>
   `;
 
-  const svg = document.getElementById('squirrelSvg');
+  loadThreeJs().then(()=>{
+    startSquirrelScene();
+  }).catch(e=>{
+    console.warn('Three.js не загрузился:', e.message);
+    const cv = document.getElementById('squirrel3dCanvas');
+    if(cv) cv.outerHTML = '<div style="font-size:140px;text-align:center">🐿️</div>';
+  });
+}
+
+function loadThreeJs(){
+  return new Promise((resolve, reject)=>{
+    if(window.THREE && window.THREE.GLTFLoader){ resolve(); return; }
+    const s1 = document.createElement('script');
+    s1.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
+    s1.onload = ()=>{
+      const s2 = document.createElement('script');
+      s2.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js';
+      s2.onload = resolve;
+      s2.onerror = reject;
+      document.head.appendChild(s2);
+    };
+    s1.onerror = reject;
+    document.head.appendChild(s1);
+  });
+}
+
+function startSquirrelScene(){
+  const canvas = document.getElementById('squirrel3dCanvas');
+  if(!canvas) return;
+
+  const W = canvas.clientWidth || 340;
+  const H = canvas.clientHeight || 340;
+
+  const scene = new THREE.Scene();
+  squirrelScene = scene;
+
+  const camera = new THREE.PerspectiveCamera(38, W/H, 0.1, 100);
+  camera.position.set(0, 1.1, 4.2);
+  camera.lookAt(0, 0.2, 0);
+  squirrelCamera = camera;
+
+  const renderer = new THREE.WebGLRenderer({
+    canvas, antialias: true, alpha: true
+  });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setSize(W, H, false);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  squirrelRenderer = renderer;
+
+  const sun = new THREE.DirectionalLight(0xffffff, 1.15);
+  sun.position.set(3, 6, 4);
+  sun.castShadow = true;
+  sun.shadow.mapSize.width = 1024;
+  sun.shadow.mapSize.height = 1024;
+  scene.add(sun);
+
+  const fill = new THREE.DirectionalLight(0xffd9a8, 0.55);
+  fill.position.set(-3, 2, -3);
+  scene.add(fill);
+
+  const bottom = new THREE.PointLight(0xffb84d, 0.7, 12);
+  bottom.position.set(0, -2, 1);
+  scene.add(bottom);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.45));
+
+  const loader = new THREE.GLTFLoader();
+  loader.load(SQUIRREL_MODEL_URL, (gltf)=>{
+    const model = gltf.scene;
+    squirrelModel = model;
+
+    const box = new THREE.Box3().setFromObject(model);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const scale = 2.2 / maxDim;
+    model.scale.setScalar(scale);
+
+    box.setFromObject(model);
+    box.getCenter(center);
+    model.position.x -= center.x * scale;
+    model.position.y -= center.y * scale;
+    model.position.z -= center.z * scale;
+
+    model.traverse((child)=>{
+      if(child.isMesh){
+        child.castShadow = true;
+        child.receiveShadow = true;
+        if(child.material){
+          if(child.material.metalness !== undefined) child.material.metalness = 0.05;
+          if(child.material.roughness !== undefined) child.material.roughness = 0.55;
+        }
+      }
+    });
+
+    scene.add(model);
+
+    if(gltf.animations && gltf.animations.length){
+      squirrelMixer = new THREE.AnimationMixer(model);
+      gltf.animations.forEach(clip=>{
+        squirrelMixer.clipAction(clip).play();
+      });
+    }
+  }, undefined, (err)=>{
+    console.warn('Модель не загрузилась:', err);
+    const cv = document.getElementById('squirrel3dCanvas');
+    if(cv){
+      cv.outerHTML = '<div style="font-size:140px;text-align:center;filter:drop-shadow(0 12px 24px rgba(255,180,80,.5));">🐿️</div>';
+    }
+  });
+
+  const shadowGeo = new THREE.CircleGeometry(1.3, 32);
+  const shadowMat = new THREE.MeshBasicMaterial({
+    color: 0xffb84d, transparent: true, opacity: 0.12
+  });
+  const shadow = new THREE.Mesh(shadowGeo, shadowMat);
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.position.y = -1.15;
+  scene.add(shadow);
+
   const s = state.squirrel;
+  s.rx = 0; s.ry = 0; s.vx = 0; s.vy = 0;
+  s.dragging = false;
+  s.lastX = 0; s.lastY = 0;
+  s.startX = 0; s.startY = 0;
+  s.moved = false;
+  s.idleTs = 0;
 
-  // Управление
-  svg.style.touchAction = 'none';
-
-  svg.addEventListener('pointerdown', (e)=>{
+  canvas.addEventListener('pointerdown', (e)=>{
     e.preventDefault();
     s.dragging = true;
     s.moved = false;
@@ -413,84 +438,86 @@ function initSquirrel3D(){
     s.vx = 0;
     s.vy = 0;
     s.idleTs = 0;
-    svg.setPointerCapture(e.pointerId);
+    canvas.style.cursor = 'grabbing';
+    try{ canvas.setPointerCapture(e.pointerId); }catch(_){}
   });
 
-  svg.addEventListener('pointermove', (e)=>{
+  canvas.addEventListener('pointermove', (e)=>{
     if(!s.dragging) return;
     const dx = e.clientX - s.lastX;
     const dy = e.clientY - s.lastY;
     s.lastX = e.clientX;
     s.lastY = e.clientY;
-
     if(Math.abs(e.clientX - s.startX) > 6 || Math.abs(e.clientY - s.startY) > 6){
       s.moved = true;
     }
-
-    s.ry += dx * 0.8;
-    s.rx -= dy * 0.6;
-    s.rx = Math.max(-60, Math.min(60, s.rx));
-    s.ry = Math.max(-180, Math.min(180, s.ry));
-
+    s.ry += dx * 0.9;
+    s.rx -= dy * 0.5;
+    s.rx = Math.max(-45, Math.min(45, s.rx));
     s.vx = dx * 0.6;
     s.vy = -dy * 0.4;
   });
 
-  svg.addEventListener('pointerup', (e)=>{
+  canvas.addEventListener('pointerup', (e)=>{
     if(!s.dragging) return;
     s.dragging = false;
-    svg.releasePointerCapture?.(e.pointerId);
-
-    if(!s.moved){
-      // это был тап, не свайп
-      doTap(e.clientX, e.clientY);
-    }
+    canvas.style.cursor = 'grab';
+    try{ canvas.releasePointerCapture(e.pointerId); }catch(_){}
+    if(!s.moved) doTap(e.clientX, e.clientY);
     s.idleTs = performance.now();
   });
-  svg.addEventListener('pointercancel', ()=>{
+
+  canvas.addEventListener('pointercancel', ()=>{
     s.dragging = false;
+    canvas.style.cursor = 'grab';
   });
 
   s.lastFrame = performance.now();
-  requestAnimationFrame(animateSquirrel);
+  animateSquirrelLoop();
 }
 
-function animateSquirrel(now){
+function animateSquirrelLoop(){
   const s = state.squirrel;
+  const now = performance.now();
   if(!s.lastFrame) s.lastFrame = now;
   const dt = Math.min(50, now - s.lastFrame) / 16;
   s.lastFrame = now;
 
-  // Инерция
   if(!s.dragging){
     s.ry += s.vx * dt;
     s.rx += s.vy * dt;
-    s.vx *= 0.94;
-    s.vy *= 0.94;
+    s.vx *= 0.93;
+    s.vy *= 0.93;
     if(Math.abs(s.vx) < 0.05) s.vx = 0;
     if(Math.abs(s.vy) < 0.05) s.vy = 0;
 
-    // Возврат к 0 если idle долго
-    if(s.idleTs && now - s.idleTs > 2500){
+    if(s.idleTs && now - s.idleTs > 2200){
       s.rx *= 0.92;
       s.ry *= 0.92;
-      if(Math.abs(s.rx) < 0.1 && Math.abs(s.ry) < 0.1){
-        // idle-анимация «дыхание»
-        s.rx = Math.sin(now / 1200) * 1.5;
-        s.ry = Math.cos(now / 1400) * 2;
+      s.vx = 0; s.vy = 0;
+      if(Math.abs(s.rx) < 0.5 && Math.abs(s.ry) < 0.5){
+        const t = now / 1000;
+        s.rx = Math.sin(t * 1.4) * 2.5;
+        s.ry = Math.cos(t * 1.1) * 3;
       }
     }
-    s.rx = Math.max(-60, Math.min(60, s.rx));
+    s.rx = Math.max(-45, Math.min(45, s.rx));
   }
 
-  const svg = document.getElementById('squirrelSvg');
-  if(svg){
-    svg.style.transform = `perspective(900px) rotateX(${s.rx}deg) rotateY(${s.ry}deg)`;
+  if(squirrelModel){
+    squirrelModel.rotation.x = (s.rx * Math.PI) / 180 * 0.6;
+    squirrelModel.rotation.y = (s.ry * Math.PI) / 180;
   }
 
-  requestAnimationFrame(animateSquirrel);
+  if(squirrelMixer) squirrelMixer.update(0.016);
+
+  if(squirrelRenderer && squirrelScene && squirrelCamera){
+    squirrelRenderer.render(squirrelScene, squirrelCamera);
+  }
+
+  requestAnimationFrame(animateSquirrelLoop);
 }
-
+  
 // ============ КНОПКИ ШАПКИ ============
 $('bonusBtn').onclick = async ()=>{
   try{
