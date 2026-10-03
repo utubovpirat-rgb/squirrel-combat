@@ -35,10 +35,14 @@
         <div id="uname">Загрузка...</div>
         <div id="league" class="league">Лига 1</div>
       </div>
+
+      <!-- 3D-белка: canvas с вращением -->
       <div class="squirrel-wrap">
-        <div id="squirrel">🐿️</div>
+        <canvas id="squirrel3d" width="600" height="600"></canvas>
         <div id="floatLayer"></div>
+        <div class="hint" id="rotateHint">↔ Поверни белку пальцем</div>
       </div>
+
       <div class="energy-row">
         <span>⚡</span>
         <div class="energy-bar"><div class="energy-fill" id="energyFill"></div></div>
