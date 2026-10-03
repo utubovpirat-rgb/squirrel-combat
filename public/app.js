@@ -1,4 +1,4 @@
-// app.js — фронт Squirrel Combat (версия с 3D-белкой)
+// app.js — фронт Squirrel Combat
 const tg = window.Telegram?.WebApp;
 tg?.ready(); tg?.expand();
 tg?.setHeaderColor?.('#0a0a12');
@@ -15,15 +15,8 @@ const state = {
   league: 1, tapBuffer: 0, tapTimer: null, activeDuel: null,
   sound: true, audioCtx: null, lastEnergyToast: 0,
   squirrel: {
-    rx: 0, ry: 0,       // текущий наклон
-    trx: 0, try_: 0,    // целевой наклон (для инерции)
-    vx: 0, vy: 0,       // скорость
-    dragging: false,
-    lastX: 0, lastY: 0,
-    startX: 0, startY: 0,
-    moved: false,
-    lastFrame: 0,
-    idleTs: 0
+    rx: 0, ry: 0, vx: 0, vy: 0, dragging: false,
+    lastX: 0, lastY: 0, startX: 0, startY: 0, moved: false, lastFrame: 0, idleTs: 0
   }
 };
 
@@ -63,12 +56,9 @@ function playCoin(){
     osc.start(t+i*0.05); osc.stop(t+i*0.05+0.09);
   });
 }
-
-// ПОБЕДНЫЙ ЗВУК — для больших выигрышей (масштабируется по размеру)
 function playWin(big = 1){
   if(!state.sound) return;
   const ctx = getAudio(); if(!ctx) return;
-  // big: 1 = обычный, 2 = крупный, 3 = джекпот
   const scale = big >= 3
     ? [523, 659, 784, 1046, 1318, 1568, 2093]
     : big >= 2
@@ -86,7 +76,6 @@ function playWin(big = 1){
     osc.connect(gain).connect(ctx.destination);
     osc.start(t); osc.stop(t + 0.24);
   });
-  // финальный акцент для крупных
   if(big >= 2){
     setTimeout(()=>{
       const ctx2 = getAudio(); if(!ctx2) return;
@@ -104,8 +93,6 @@ function playWin(big = 1){
     }, scale.length * spacing * 1000 + 30);
   }
 }
-
-// Проверка размера выигрыша для звука
 function playRewardSound(amount){
   if(amount >= 1000000) playWin(3);
   else if(amount >= 100000) playWin(2);
@@ -113,7 +100,7 @@ function playRewardSound(amount){
   else playCoin();
 }
 
-// ============ DEVICE / API ============
+// ============ API ============
 function getDevice(){
   let id = localStorage.getItem('dev_id');
   if(!id){ id = (crypto.randomUUID?.() || Math.random().toString(36).slice(2)); localStorage.setItem('dev_id', id); }
@@ -134,7 +121,6 @@ async function api(path, body={}){
   return json;
 }
 
-// ============ ЗАГРУЗКА ============
 async function loadMe(){
   const p = await api('/api/me', {
     tgUser:{
@@ -169,17 +155,13 @@ function renderHdr(){
   if(et) et.textContent = `${fmt(state.energy)} / ${fmt(state.maxEnergy)}`;
 }
 
-// ============ TOAST / MODAL ============
 function toast(msg, cls='', dur=2800){
   const t = document.createElement('div');
   t.className = 'toast '+cls; t.textContent = msg;
   $('toasts').appendChild(t);
   setTimeout(()=>t.remove(), dur+400);
 }
-function modal(html){
-  $('modalBody').innerHTML = html;
-  $('modalBg').classList.add('on');
-}
+function modal(html){ $('modalBody').innerHTML = html; $('modalBg').classList.add('on'); }
 function closeModal(){ $('modalBg').classList.remove('on'); }
 $('modalBg').onclick = e => { if(e.target.id === 'modalBg') closeModal(); };
 
@@ -206,19 +188,10 @@ function doTap(x, y){
   state.energy--;
   state.balance += state.perClick;
   renderHdr();
-
   spawnFloat(x, y, '+'+state.perClick);
   spawnCoinBurst(x, y);
   playTick();
   navigator.vibrate?.(6);
-
-  // Анимация тапа — SVG сжимается
-  const svg = document.getElementById('squirrelSvg');
-  if(svg){
-    svg.style.transition = 'transform .08s';
-    svg.style.transform += ' scale(.94)';
-    setTimeout(()=>{ svg.style.transition = 'transform .18s'; svg.style.transform = svg.style.transform.replace(/ scale\(\.94\)/, ''); }, 80);
-  }
 
   state.tapBuffer++;
   if(!tapFlushTimer) tapFlushTimer = setTimeout(flushTaps, SEND_INTERVAL);
@@ -241,9 +214,7 @@ async function flushTaps(){
       renderHdr();
     }
   }catch(e){
-    if(e.status !== 401){
-      console.warn('tap fail', e.message);
-    }
+    if(e.status !== 401) console.warn('tap fail', e.message);
   }
 }
 
@@ -275,19 +246,19 @@ function spawnCoinBurst(x, y){
   }
 }
 
-// ============ 3D-БЕЛКА (Three.js + belka.glb) ============
+// ============ 3D-БЕЛКА ============
 const SQUIRREL_MODEL_URL = 'https://github.com/utubovpirat-rgb/squirrel-combat/releases/download/v1/belka.glb';
-
 let squirrelScene = null;
 let squirrelCamera = null;
 let squirrelRenderer = null;
 let squirrelModel = null;
 let squirrelMixer = null;
+let squirrelLoopStarted = false;
+let squirrelFallback = false;
 
 function initSquirrel3D(){
   const wrap = document.querySelector('.squirrel-wrap');
   if(!wrap) return;
-
   wrap.innerHTML = `
     <canvas id="squirrel3dCanvas" style="
       width:100%; max-width:340px; height:340px;
@@ -297,137 +268,57 @@ function initSquirrel3D(){
     <div id="floatLayer"></div>
     <div class="hint">↔ Поверни пальцем</div>
   `;
+  const canvas = document.getElementById('squirrel3dCanvas');
+  if(canvas) attachSquirrelControls(canvas);
 
-  loadThreeJs().then(()=>{
-    startSquirrelScene();
-  }).catch(e=>{
-    console.warn('Three.js не загрузился:', e.message);
-    const cv = document.getElementById('squirrel3dCanvas');
-    if(cv) cv.outerHTML = '<div style="font-size:140px;text-align:center">🐿️</div>';
-  });
+  loadThreeJs()
+    .then(()=>startSquirrelScene())
+    .catch(e=>{
+      console.warn('Three.js не загрузился:', e.message);
+      fallbackToEmoji();
+    });
+}
+
+function fallbackToEmoji(){
+  squirrelFallback = true;
+  const wrap = document.querySelector('.squirrel-wrap');
+  if(!wrap) return;
+  wrap.innerHTML = `
+    <div id="squirrelFallback" style="
+      font-size:180px;line-height:1;text-align:center;
+      filter:drop-shadow(0 18px 30px rgba(255,180,80,.5));
+      user-select:none;cursor:pointer;
+      transition:transform .05s;
+    ">🐿️</div>
+    <div id="floatLayer"></div>
+    <div class="hint">↔ Поверни пальцем</div>
+  `;
+  const fb = document.getElementById('squirrelFallback');
+  if(fb) attachSquirrelControls(fb);
 }
 
 function loadThreeJs(){
   return new Promise((resolve, reject)=>{
     if(window.THREE && window.THREE.GLTFLoader){ resolve(); return; }
     const s1 = document.createElement('script');
-    s1.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
+    s1.src = '/three.min.js';
     s1.onload = ()=>{
       const s2 = document.createElement('script');
-      s2.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js';
+      s2.src = '/GLTFLoader.js';
       s2.onload = resolve;
-      s2.onerror = reject;
+      s2.onerror = ()=>reject(new Error('GLTFLoader не загрузился'));
       document.head.appendChild(s2);
     };
-    s1.onerror = reject;
+    s1.onerror = ()=>reject(new Error('three.min.js не загрузился'));
     document.head.appendChild(s1);
   });
 }
 
-function startSquirrelScene(){
-  const canvas = document.getElementById('squirrel3dCanvas');
-  if(!canvas) return;
-
-  const W = canvas.clientWidth || 340;
-  const H = canvas.clientHeight || 340;
-
-  const scene = new THREE.Scene();
-  squirrelScene = scene;
-
-  const camera = new THREE.PerspectiveCamera(38, W/H, 0.1, 100);
-  camera.position.set(0, 1.1, 4.2);
-  camera.lookAt(0, 0.2, 0);
-  squirrelCamera = camera;
-
-  const renderer = new THREE.WebGLRenderer({
-    canvas, antialias: true, alpha: true
-  });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-  renderer.setSize(W, H, false);
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  squirrelRenderer = renderer;
-
-  const sun = new THREE.DirectionalLight(0xffffff, 1.15);
-  sun.position.set(3, 6, 4);
-  sun.castShadow = true;
-  sun.shadow.mapSize.width = 1024;
-  sun.shadow.mapSize.height = 1024;
-  scene.add(sun);
-
-  const fill = new THREE.DirectionalLight(0xffd9a8, 0.55);
-  fill.position.set(-3, 2, -3);
-  scene.add(fill);
-
-  const bottom = new THREE.PointLight(0xffb84d, 0.7, 12);
-  bottom.position.set(0, -2, 1);
-  scene.add(bottom);
-
-  scene.add(new THREE.AmbientLight(0xffffff, 0.45));
-
-  const loader = new THREE.GLTFLoader();
-  loader.load(SQUIRREL_MODEL_URL, (gltf)=>{
-    const model = gltf.scene;
-    squirrelModel = model;
-
-    const box = new THREE.Box3().setFromObject(model);
-    const size = box.getSize(new THREE.Vector3());
-    const center = box.getCenter(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z);
-    const scale = 2.2 / maxDim;
-    model.scale.setScalar(scale);
-
-    box.setFromObject(model);
-    box.getCenter(center);
-    model.position.x -= center.x * scale;
-    model.position.y -= center.y * scale;
-    model.position.z -= center.z * scale;
-
-    model.traverse((child)=>{
-      if(child.isMesh){
-        child.castShadow = true;
-        child.receiveShadow = true;
-        if(child.material){
-          if(child.material.metalness !== undefined) child.material.metalness = 0.05;
-          if(child.material.roughness !== undefined) child.material.roughness = 0.55;
-        }
-      }
-    });
-
-    scene.add(model);
-
-    if(gltf.animations && gltf.animations.length){
-      squirrelMixer = new THREE.AnimationMixer(model);
-      gltf.animations.forEach(clip=>{
-        squirrelMixer.clipAction(clip).play();
-      });
-    }
-  }, undefined, (err)=>{
-    console.warn('Модель не загрузилась:', err);
-    const cv = document.getElementById('squirrel3dCanvas');
-    if(cv){
-      cv.outerHTML = '<div style="font-size:140px;text-align:center;filter:drop-shadow(0 12px 24px rgba(255,180,80,.5));">🐿️</div>';
-    }
-  });
-
-  const shadowGeo = new THREE.CircleGeometry(1.3, 32);
-  const shadowMat = new THREE.MeshBasicMaterial({
-    color: 0xffb84d, transparent: true, opacity: 0.12
-  });
-  const shadow = new THREE.Mesh(shadowGeo, shadowMat);
-  shadow.rotation.x = -Math.PI / 2;
-  shadow.position.y = -1.15;
-  scene.add(shadow);
-
+function attachSquirrelControls(el){
   const s = state.squirrel;
-  s.rx = 0; s.ry = 0; s.vx = 0; s.vy = 0;
-  s.dragging = false;
-  s.lastX = 0; s.lastY = 0;
-  s.startX = 0; s.startY = 0;
-  s.moved = false;
-  s.idleTs = 0;
-
-  canvas.addEventListener('pointerdown', (e)=>{
+  el.style.touchAction = 'none';
+  el.style.cursor = 'grab';
+  el.addEventListener('pointerdown', (e)=>{
     e.preventDefault();
     s.dragging = true;
     s.moved = false;
@@ -435,14 +326,12 @@ function startSquirrelScene(){
     s.startY = e.clientY;
     s.lastX = e.clientX;
     s.lastY = e.clientY;
-    s.vx = 0;
-    s.vy = 0;
+    s.vx = 0; s.vy = 0;
     s.idleTs = 0;
-    canvas.style.cursor = 'grabbing';
-    try{ canvas.setPointerCapture(e.pointerId); }catch(_){}
+    el.style.cursor = 'grabbing';
+    try{ el.setPointerCapture(e.pointerId); }catch(_){}
   });
-
-  canvas.addEventListener('pointermove', (e)=>{
+  el.addEventListener('pointermove', (e)=>{
     if(!s.dragging) return;
     const dx = e.clientX - s.lastX;
     const dy = e.clientY - s.lastY;
@@ -457,23 +346,101 @@ function startSquirrelScene(){
     s.vx = dx * 0.6;
     s.vy = -dy * 0.4;
   });
-
-  canvas.addEventListener('pointerup', (e)=>{
+  el.addEventListener('pointerup', (e)=>{
     if(!s.dragging) return;
     s.dragging = false;
-    canvas.style.cursor = 'grab';
-    try{ canvas.releasePointerCapture(e.pointerId); }catch(_){}
+    el.style.cursor = 'grab';
+    try{ el.releasePointerCapture(e.pointerId); }catch(_){}
     if(!s.moved) doTap(e.clientX, e.clientY);
     s.idleTs = performance.now();
   });
-
-  canvas.addEventListener('pointercancel', ()=>{
+  el.addEventListener('pointercancel', ()=>{
     s.dragging = false;
-    canvas.style.cursor = 'grab';
+    el.style.cursor = 'grab';
+  });
+}
+
+function startSquirrelScene(){
+  const canvas = document.getElementById('squirrel3dCanvas');
+  if(!canvas) return;
+  const W = canvas.clientWidth || 340;
+  const H = canvas.clientHeight || 340;
+
+  const scene = new THREE.Scene();
+  squirrelScene = scene;
+  const camera = new THREE.PerspectiveCamera(38, W/H, 0.1, 100);
+  camera.position.set(0, 1.1, 4.2);
+  camera.lookAt(0, 0.2, 0);
+  squirrelCamera = camera;
+
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setSize(W, H, false);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  squirrelRenderer = renderer;
+
+  const sun = new THREE.DirectionalLight(0xffffff, 1.15);
+  sun.position.set(3, 6, 4);
+  sun.castShadow = true;
+  sun.shadow.mapSize.width = 1024;
+  sun.shadow.mapSize.height = 1024;
+  scene.add(sun);
+  const fill = new THREE.DirectionalLight(0xffd9a8, 0.55);
+  fill.position.set(-3, 2, -3);
+  scene.add(fill);
+  const bottom = new THREE.PointLight(0xffb84d, 0.7, 12);
+  bottom.position.set(0, -2, 1);
+  scene.add(bottom);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.45));
+
+  const loader = new THREE.GLTFLoader();
+  loader.load(SQUIRREL_MODEL_URL, (gltf)=>{
+    const model = gltf.scene;
+    squirrelModel = model;
+    const box = new THREE.Box3().setFromObject(model);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const scale = 2.2 / maxDim;
+    model.scale.setScalar(scale);
+    box.setFromObject(model);
+    box.getCenter(center);
+    model.position.x -= center.x * scale;
+    model.position.y -= center.y * scale;
+    model.position.z -= center.z * scale;
+    model.traverse((child)=>{
+      if(child.isMesh){
+        child.castShadow = true;
+        child.receiveShadow = true;
+        if(child.material){
+          if(child.material.metalness !== undefined) child.material.metalness = 0.05;
+          if(child.material.roughness !== undefined) child.material.roughness = 0.55;
+        }
+      }
+    });
+    scene.add(model);
+    if(gltf.animations && gltf.animations.length){
+      squirrelMixer = new THREE.AnimationMixer(model);
+      gltf.animations.forEach(clip=>squirrelMixer.clipAction(clip).play());
+    }
+  }, undefined, (err)=>{
+    console.warn('Модель не загрузилась:', err);
+    fallbackToEmoji();
   });
 
-  s.lastFrame = performance.now();
-  animateSquirrelLoop();
+  const shadowGeo = new THREE.CircleGeometry(1.3, 32);
+  const shadowMat = new THREE.MeshBasicMaterial({ color: 0xffb84d, transparent: true, opacity: 0.12 });
+  const shadow = new THREE.Mesh(shadowGeo, shadowMat);
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.position.y = -1.15;
+  scene.add(shadow);
+
+  if(!squirrelLoopStarted){
+    squirrelLoopStarted = true;
+    state.squirrel.lastFrame = performance.now();
+    animateSquirrelLoop();
+  }
 }
 
 function animateSquirrelLoop(){
@@ -486,14 +453,11 @@ function animateSquirrelLoop(){
   if(!s.dragging){
     s.ry += s.vx * dt;
     s.rx += s.vy * dt;
-    s.vx *= 0.93;
-    s.vy *= 0.93;
+    s.vx *= 0.93; s.vy *= 0.93;
     if(Math.abs(s.vx) < 0.05) s.vx = 0;
     if(Math.abs(s.vy) < 0.05) s.vy = 0;
-
     if(s.idleTs && now - s.idleTs > 2200){
-      s.rx *= 0.92;
-      s.ry *= 0.92;
+      s.rx *= 0.92; s.ry *= 0.92;
       s.vx = 0; s.vy = 0;
       if(Math.abs(s.rx) < 0.5 && Math.abs(s.ry) < 0.5){
         const t = now / 1000;
@@ -508,16 +472,19 @@ function animateSquirrelLoop(){
     squirrelModel.rotation.x = (s.rx * Math.PI) / 180 * 0.6;
     squirrelModel.rotation.y = (s.ry * Math.PI) / 180;
   }
-
+  if(squirrelFallback){
+    const fb = document.getElementById('squirrelFallback');
+    if(fb){
+      fb.style.transform = `perspective(900px) rotateX(${s.rx.toFixed(2)}deg) rotateY(${s.ry.toFixed(2)}deg)`;
+    }
+  }
   if(squirrelMixer) squirrelMixer.update(0.016);
-
   if(squirrelRenderer && squirrelScene && squirrelCamera){
     squirrelRenderer.render(squirrelScene, squirrelCamera);
   }
-
   requestAnimationFrame(animateSquirrelLoop);
 }
-  
+
 // ============ КНОПКИ ШАПКИ ============
 $('bonusBtn').onclick = async ()=>{
   try{
@@ -535,7 +502,6 @@ $('soundBtn').onclick = ()=>{
   $('soundBtn').textContent = state.sound ? '🔊' : '🔇';
   if(state.sound) playTick();
 };
-
 $('claimBtn').onclick = async ()=>{
   try{
     const r = await api('/api/passive');
@@ -558,21 +524,11 @@ $('boostBtn').onclick = async ()=>{
 
 // ============ ТАБЫ ============
 const TABS = [
-  ['home','🐿️','Игра'],
-  ['cards','🏦','Карты'],
-  ['boosts','⚡','Бусты'],
-  ['session','💤','Сессия'],
-  ['duel','⚔️','Дуэль'],
-  ['clan','🛡️','Клан'],
-  ['daily','📅','Задания'],
-  ['ach','🏅','Ачивки'],
-  ['season','🏆','Сезон'],
-  ['wheel','🎡','Колесо'],
-  ['promo','🎟️','Промо'],
-  ['ref','🔗','Рефералы'],
-  ['refcontest','🥇','Турнир'],
-  ['channel','📢','Канал'],
-  ['top','👑','Топ'],
+  ['home','🐿️','Игра'],['cards','🏦','Карты'],['boosts','⚡','Бусты'],
+  ['session','💤','Сессия'],['duel','⚔️','Дуэль'],['clan','🛡️','Клан'],
+  ['daily','📅','Задания'],['ach','🏅','Ачивки'],['season','🏆','Сезон'],
+  ['wheel','🎡','Колесо'],['promo','🎟️','Промо'],['ref','🔗','Рефералы'],
+  ['refcontest','🥇','Турнир'],['channel','📢','Канал'],['top','👑','Топ'],
   ['profile','👤','Профиль']
 ];
 function buildTabs(){
@@ -590,7 +546,6 @@ function go(tab){
   renderTab(tab);
 }
 
-// ============ КАТАЛОГ ============
 const CARDS_CACHE = {};
 async function loadCatalog(){
   if(CARDS_CACHE.cards) return CARDS_CACHE;
@@ -605,7 +560,6 @@ async function loadCatalog(){
   return CARDS_CACHE;
 }
 
-// ============ РЕНДЕР ============
 async function renderTab(tab){
   const c = $('p-'+tab); if(!c) return;
   if(c.__cleanup){ c.__cleanup(); c.__cleanup = null; }
@@ -638,12 +592,7 @@ async function renderTab(tab){
     c.querySelectorAll('button[data-card]').forEach(btn=>{
       btn.onclick = async ()=>{
         btn.disabled = true;
-        try{
-          await api('/api/buy-card', {cardId:btn.dataset.card});
-          playWin(2);
-          await loadMe();
-          renderTab('cards');
-        }
+        try{ await api('/api/buy-card', {cardId:btn.dataset.card}); playWin(2); await loadMe(); renderTab('cards'); }
         catch(e){ toast(e.message, 'pink'); btn.disabled = false; }
       };
     });
@@ -698,13 +647,7 @@ async function renderTab(tab){
           <button id="sUpg" ${s.speedLevel>=5?'disabled':''}>${s.speedLevel>=5?'MAX':'Улучшить'}</button></div>`;
       $('sStart').onclick = async ()=>{ try{ await api('/api/session/start'); playCoin(); renderTab('session'); }catch(e){ toast(e.message); } };
       $('sClaim').onclick = async ()=>{
-        try{
-          const r = await api('/api/session/claim');
-          toast('💤 +'+fmt(r.gain),'gold');
-          playRewardSound(r.gain);
-          await loadMe();
-          renderTab('session');
-        }
+        try{ const r = await api('/api/session/claim'); toast('💤 +'+fmt(r.gain),'gold'); playRewardSound(r.gain); await loadMe(); renderTab('session'); }
         catch(e){ toast(e.message, 'pink'); }
       };
       $('sUpg').onclick = async ()=>{ try{ await api('/api/session/upgrade'); playWin(1); renderTab('session'); }catch(e){ toast(e.message); } };
@@ -727,12 +670,9 @@ async function renderTab(tab){
     $('dCreate').onclick = async ()=>{
       const stake = parseInt(prompt('Ставка (мин 1000):','1000')||'0');
       if(stake < 1000) return;
-      try{
-        const r = await api('/api/duel/create', {stake});
-        state.activeDuel = r.id;
-        toast('Ссылка: '+r.link, 'gold', 8000);
-        renderDuelGame(c);
-      }catch(e){ toast(e.message, 'pink'); }
+      try{ const r = await api('/api/duel/create', {stake}); state.activeDuel = r.id;
+        toast('Ссылка: '+r.link, 'gold', 8000); renderDuelGame(c); }
+      catch(e){ toast(e.message, 'pink'); }
     };
     $('dJoin').onclick = async ()=>{
       const id = prompt('ID дуэли:'); if(!id) return;
@@ -827,13 +767,8 @@ async function renderTab(tab){
       }).join('');
       c.querySelectorAll('[data-q]').forEach(b=>{
         b.onclick = async ()=>{
-          try{
-            const r = await api('/api/daily/claim',{id:b.dataset.q});
-            toast('+'+fmt(r.reward), 'gold');
-            playRewardSound(r.reward);
-            await loadMe();
-            renderTab('daily');
-          }
+          try{ const r = await api('/api/daily/claim',{id:b.dataset.q});
+            toast('+'+fmt(r.reward), 'gold'); playRewardSound(r.reward); await loadMe(); renderTab('daily'); }
           catch(e){ toast(e.message); }
         };
       });
@@ -919,14 +854,9 @@ async function renderTab(tab){
         try{
           const r = await api('/api/wheel/spin');
           await animateWheel(r.prize.idx, info.prizes);
-          setTimeout(()=>{
-            toast('🎉 '+r.msg, 'gold', 5000);
-            // размер приза по его value
-            const val = r.prize.value || 0;
-            playRewardSound(val * 10);
-            loadMe();
-            renderTab('wheel');
-          }, 4200);
+          setTimeout(()=>{ toast('🎉 '+r.msg, 'gold', 5000);
+            playRewardSound((r.prize.value||0)*10);
+            loadMe(); renderTab('wheel'); }, 4200);
         }catch(e){ toast(e.message, 'pink'); $('spinBtn').disabled = false; }
       };
     }catch(e){ c.innerHTML = '<div class="empty"><div class="ic">🎡</div>Ошибка</div>'; }
@@ -1109,7 +1039,6 @@ async function renderTab(tab){
   }
 }
 
-// ============ DUEL ============
 async function renderDuelGame(c){
   const id = state.activeDuel; if(!id) return;
   c.innerHTML = `
@@ -1173,7 +1102,6 @@ async function renderDuelGame(c){
   refresh();
 }
 
-// ============ КОЛЕСО ============
 function drawWheel(prizes){
   const cv = $('wheelCanvas'); if(!cv || !prizes) return;
   const dpr = devicePixelRatio||1;
