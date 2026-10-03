@@ -1,4 +1,4 @@
-// app.js — фронт Squirrel Combat (оптимизированная версия)
+// app.js — фронт Squirrel Combat (версия без 3D-белки, все табы рабочие)
 const tg = window.Telegram?.WebApp;
 tg?.ready(); tg?.expand();
 tg?.setHeaderColor?.('#0a0a12');
@@ -16,7 +16,7 @@ const state = {
   sound: true, audioCtx: null, lastEnergyToast: 0
 };
 
-// ============ АУДИО (лёгкое, без пересоздания) ============
+// ============ ЗВУК ============
 function getAudio(){
   if(!state.audioCtx){
     try{ state.audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){}
@@ -89,7 +89,7 @@ async function api(path, body={}){
   return json;
 }
 
-// ============ ЗАГРУЗКА ИГРОКА ============
+// ============ ЗАГРУЗКА ============
 async function loadMe(){
   const p = await api('/api/me', {
     tgUser:{
@@ -138,16 +138,16 @@ function modal(html){
 function closeModal(){ $('modalBg').classList.remove('on'); }
 $('modalBg').onclick = e => { if(e.target.id === 'modalBg') closeModal(); };
 
-// ============ TAP (оптимизировано) ============
+// ============ TAP ============
 const TAP_DEBOUNCE = 30;
 const SEND_INTERVAL = 250;
 let lastTapTs = 0;
 let tapFlushTimer = null;
 
 function doTap(x, y){
-  const now = performance.now();
-  if(now - lastTapTs < TAP_DEBOUNCE) return;
-  lastTapTs = now;
+  const nowT = performance.now();
+  if(nowT - lastTapTs < TAP_DEBOUNCE) return;
+  lastTapTs = nowT;
 
   if(state.energy <= 0){
     const t = Date.now();
@@ -168,9 +168,7 @@ function doTap(x, y){
   navigator.vibrate?.(6);
 
   state.tapBuffer++;
-  if(!tapFlushTimer){
-    tapFlushTimer = setTimeout(flushTaps, SEND_INTERVAL);
-  }
+  if(!tapFlushTimer) tapFlushTimer = setTimeout(flushTaps, SEND_INTERVAL);
 }
 
 async function flushTaps(){
@@ -191,7 +189,6 @@ async function flushTaps(){
     }
   }catch(e){
     if(e.status !== 401){
-      // мягкий откат — не сбрасываем локально, просто ждём следующий запрос
       console.warn('tap fail', e.message);
     }
   }
@@ -202,8 +199,8 @@ function spawnFloat(x, y, text){
   const el = document.createElement('div');
   el.className = 'float';
   const r = layer.getBoundingClientRect();
-  el.style.left = (x - r.left) + 'px';
-  el.style.top = (y - r.top) + 'px';
+  el.style.left = (x - r.left)+'px';
+  el.style.top = (y - r.top)+'px';
   el.textContent = text;
   layer.appendChild(el);
   setTimeout(()=>el.remove(), 950);
@@ -216,13 +213,27 @@ function spawnCoinBurst(x, y){
     const el = document.createElement('div');
     el.className = 'coin-fx';
     el.textContent = ['🪙','⭐','✨'][i];
-    el.style.left = (x - r.left) + 'px';
-    el.style.top = (y - r.top) + 'px';
+    el.style.left = (x - r.left)+'px';
+    el.style.top = (y - r.top)+'px';
     el.style.setProperty('--dx', (Math.random()*80-40)+'px');
     el.style.setProperty('--dy', (-60 - Math.random()*40)+'px');
     layer.appendChild(el);
     setTimeout(()=>el.remove(), 850);
   }
+}
+
+// ============ TAP-POINT (белка через эмодзи-кнопку + canvas пустой) ============
+function attachSquirrelTap(){
+  const wrap = document.querySelector('.squirrel-wrap');
+  if(!wrap) return;
+  const canvas = $('squirrel3d');
+  // Если canvas есть — цепляем на canvas, если нет — на wrap
+  const target = canvas || wrap;
+  target.style.touchAction = 'none';
+  target.addEventListener('pointerdown', (e)=>{
+    e.preventDefault();
+    doTap(e.clientX, e.clientY);
+  }, {passive:false});
 }
 
 // ============ КНОПКИ ШАПКИ ============
@@ -494,7 +505,9 @@ async function renderTab(tab){
 
   else if(tab === 'daily'){
     try{
-      const list = await fetch('/api/daily/list',{headers:{'X-Init-Data':initData}}).then(r=>r.json());
+      console.log('daily tab opened');
+      const list = await fetch('/api/daily/list',{headers:{'X-Init-Data':initData}}).then(r=>r.json()).catch(e=>{ console.error('daily fetch error', e); return []; });
+      console.log('daily list:', list);
       if(!list.length){ c.innerHTML = '<div class="empty"><div class="ic">📅</div>Нет заданий на сегодня</div>'; return; }
       c.innerHTML = list.map(q=>{
         const pct = q.goal? Math.min(100, q.progress/q.goal*100) : 0;
@@ -519,12 +532,12 @@ async function renderTab(tab){
           catch(e){ toast(e.message); }
         };
       });
-    }catch(e){ c.innerHTML = '<div class="empty"><div class="ic">📅</div>Ошибка</div>'; }
+    }catch(e){ c.innerHTML = '<div class="empty"><div class="ic">📅</div>Ошибка: '+e.message+'</div>'; }
   }
 
   else if(tab === 'ach'){
     try{
-      const list = await fetch('/api/ach/list',{headers:{'X-Init-Data':initData}}).then(r=>r.json());
+      const list = await fetch('/api/ach/list',{headers:{'X-Init-Data':initData}}).then(r=>r.json()).catch(()=>[]);
       if(!list.length){ c.innerHTML = '<div class="empty"><div class="ic">🏅</div>Пока нет достижений</div>'; return; }
       const byCat = {};
       list.forEach(a=>{ (byCat[a.category] ||= []).push(a); });
@@ -550,9 +563,9 @@ async function renderTab(tab){
 
   else if(tab === 'season'){
     try{
-      const s = await fetch('/api/season/current',{headers:{'X-Init-Data':initData}}).then(r=>r.json());
+      const s = await fetch('/api/season/current',{headers:{'X-Init-Data':initData}}).then(r=>r.json()).catch(()=>({active:false}));
       if(!s.active){ c.innerHTML = '<div class="empty"><div class="ic">🏆</div>Сезон скоро начнётся</div>'; return; }
-      const lb = await fetch('/api/season/leaderboard',{headers:{'X-Init-Data':initData}}).then(r=>r.json());
+      const lb = await fetch('/api/season/leaderboard',{headers:{'X-Init-Data':initData}}).then(r=>r.json()).catch(()=>[]);
       const days = Math.floor(s.secondsLeft/86400), hrs = Math.floor((s.secondsLeft%86400)/3600);
       c.innerHTML = `
         <div class="card" style="flex-direction:column;align-items:stretch">
@@ -575,7 +588,11 @@ async function renderTab(tab){
 
   else if(tab === 'wheel'){
     try{
-      const info = await fetch('/api/wheel/info',{headers:{'X-Init-Data':initData}}).then(r=>r.json());
+      const info = await fetch('/api/wheel/info',{headers:{'X-Init-Data':initData}}).then(r=>r.json()).catch(()=>({ready:false,nextIn:0,streak:0,prizes:[]}));
+      if(!info.prizes || !info.prizes.length){
+        c.innerHTML = '<div class="empty"><div class="ic">🎡</div>Колесо недоступно</div>';
+        return;
+      }
       const nextH = Math.floor(info.nextIn/3600), nextM = Math.floor((info.nextIn%3600)/60);
       c.innerHTML = `
         <div class="card" style="flex-direction:column;align-items:center;padding:20px">
@@ -589,9 +606,9 @@ async function renderTab(tab){
             color:#3a1e00;border-radius:12px" ${info.ready?'':'disabled'}>
             ${info.ready?'КРУТИТЬ БЕСПЛАТНО':`Через ${nextH}ч ${nextM}м`}
           </button>
-          <div style="margin-top:8px;font-size:11px;color:#8888aa">Серия: ${info.streak}</div>
+          <div style="margin-top:8px;font-size:11px;color:#8888aa">Серия: ${info.streak||0}</div>
         </div>`;
-      drawWheel(info.prizes);
+      requestAnimationFrame(()=>drawWheel(info.prizes));
       if(info.ready) $('spinBtn').onclick = async ()=>{
         $('spinBtn').disabled = true;
         try{
@@ -662,9 +679,9 @@ async function renderTab(tab){
 
   else if(tab === 'refcontest'){
     try{
-      const s = await fetch('/api/ref-contest/current',{headers:{'X-Init-Data':initData}}).then(r=>r.json());
+      const s = await fetch('/api/ref-contest/current',{headers:{'X-Init-Data':initData}}).then(r=>r.json()).catch(()=>({active:false}));
       if(!s.active){ c.innerHTML = '<div class="empty"><div class="ic">🥇</div>Турнир скоро начнётся</div>'; return; }
-      const lb = await fetch('/api/ref-contest/leaderboard',{headers:{'X-Init-Data':initData}}).then(r=>r.json());
+      const lb = await fetch('/api/ref-contest/leaderboard',{headers:{'X-Init-Data':initData}}).then(r=>r.json()).catch(()=>[]);
       const days = Math.floor(s.secondsLeft/86400), hrs = Math.floor((s.secondsLeft%86400)/3600);
       c.innerHTML = `
         <div class="card" style="flex-direction:column;align-items:stretch">
@@ -848,7 +865,7 @@ async function renderDuelGame(c){
 function drawWheel(prizes){
   const cv = $('wheelCanvas'); if(!cv || !prizes) return;
   const dpr = devicePixelRatio||1;
-  const S = cv.clientWidth;
+  const S = cv.clientWidth || 280;
   cv.width = S*dpr; cv.height = S*dpr;
   const ctx = cv.getContext('2d'); ctx.scale(dpr,dpr);
   const cx=S/2, cy=S/2, R=S/2-6, n=prizes.length, arc=2*Math.PI/n;
@@ -908,5 +925,5 @@ function animateWheel(targetIdx, prizes){
     if(l){ l.classList.add('off'); setTimeout(()=>l.remove(), 700); }
   }, 400);
   go('home');
-  if(typeof initSquirrel3D === 'function') initSquirrel3D();
+  attachSquirrelTap();
 })();
