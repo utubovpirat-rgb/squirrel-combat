@@ -57,21 +57,8 @@ function auth(req,res,next){
   const params = new URLSearchParams(initData);
   const user = JSON.parse(params.get('user'));
   req.tgId = user.id;
-
-  const dev = req.headers['x-device'] || 'unknown';
-  const prev = lastDevice.get(req.tgId);
-  if(prev && prev.dev !== dev && Date.now() - prev.ts < 60000){
-    return res.status(429).json({error:'device mismatch'});
-  }
-  lastDevice.set(req.tgId, {dev, ts: Date.now()});
   next();
 }
-
-function adminOnly(req,res,next){
-  if(!ADMIN_IDS.includes(req.tgId)) return res.status(403).json({error:'no'});
-  next();
-}
-
 // ---------- HELPERS ----------
 function regenEnergy(p){
   const t = now();
