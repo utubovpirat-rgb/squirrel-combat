@@ -439,7 +439,7 @@ function startSquirrelScene(){
     box.setFromObject(model);
     box.getCenter(center);
     model.position.x -= center.x * scale;
-    model.position.y -= center.y * scale - 1.30;
+    model.position.y -= center.y * scale - 1.43;
     model.position.z -= center.z * scale;
 
     model.traverse((child)=>{
