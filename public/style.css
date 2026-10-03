@@ -195,27 +195,27 @@ input{font-family:inherit;outline:none;border:none;background:none;color:inherit
   animation:coinBurst .8s ease-out forwards;
 }
 
-/* ============ 3D-БЕЛКА ============ */
+/* ============ 3D-БЕЛКА (Three.js) ============ */
 .squirrel-wrap{
   position:relative;
   display:flex;
   justify-content:center;
   align-items:center;
-  min-height:340px;
-  margin:8px 0 12px;
-  perspective:900px;
+  min-height:360px;
+  margin:8px 0 14px;
   touch-action:none;
   user-select:none;
-}
-.squirrel-wrap svg{
-  transform-style:preserve-3d;
-  will-change:transform;
-  cursor:grab;
-  touch-action:none;
   -webkit-user-select:none;
-  user-select:none;
 }
-.squirrel-wrap svg:active{
+#squirrel3dCanvas{
+  width:100%;
+  max-width:340px;
+  height:340px;
+  display:block;
+  touch-action:none;
+  cursor:grab;
+}
+#squirrel3dCanvas:active{
   cursor:grabbing;
 }
 .squirrel-wrap::before{
