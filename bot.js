@@ -1,10 +1,11 @@
 // bot.js — Telegram-бот Squirrel Combat
-import { Bot, InlineKeyboard, webhookCallback } from 'grammy';
+import { Bot, InlineKeyboard } from 'grammy';
 import 'dotenv/config';
 import { DB, sbAdmin } from './db.js';
 
 export const bot = new Bot(process.env.BOT_TOKEN);
 const WEBAPP_URL = process.env.WEBAPP_URL;
+const CHANNEL_URL = 'https://t.me/squirrel_combat_news';
 const ADMIN_IDS = (process.env.ADMIN_IDS || '').split(',').map(x=>parseInt(x)).filter(Boolean);
 
 bot.catch((err)=>{
@@ -18,20 +19,17 @@ bot.command('start', async (ctx) => {
   const fname = ctx.from.first_name || 'Игрок';
   const payload = String(ctx.match || '');
 
-  // реф
   let referrerId = null;
   if(payload.startsWith('ref_')){
     const rid = parseInt(payload.slice(4));
     if(!isNaN(rid) && rid !== tgId) referrerId = rid;
   }
 
-  // канал-партнёр
   let channelId = null;
   if(payload.startsWith('ch_')){
     channelId = payload.slice(3);
   }
 
-  // дуэль — редирект в мини-апп
   if(payload.startsWith('duel_')){
     const duelId = payload.slice(5);
     const kb = new InlineKeyboard()
@@ -39,7 +37,6 @@ bot.command('start', async (ctx) => {
     return ctx.reply('⚔️ Тебя вызвали на дуэль! Открой мини-апп чтобы принять.', { reply_markup: kb });
   }
 
-  // реферальный бонус
   let p = await DB.getPlayer(tgId);
   if(!p){
     p = await DB.createPlayer(tgId, uname, fname, referrerId);
@@ -50,7 +47,6 @@ bot.command('start', async (ctx) => {
           await DB.addBalance(referrerId, 25000);
           await DB.addBalance(tgId, 25000);
           await DB.logReferral(referrerId, tgId, 25000);
-          // реф-конкурс
           const { data: rc } = await sbAdmin.from('ref_contests').select('*').eq('status','active').maybeSingle();
           if(rc){
             const { data: s } = await sbAdmin.from('ref_contest_scores')
@@ -62,7 +58,6 @@ bot.command('start', async (ctx) => {
         }
       }catch(e){ console.error('ref bonus', e); }
     }
-    // канал-партнёрка
     if(channelId){
       try{
         const { data: ch } = await sbAdmin.from('channels').select('*').eq('id', channelId).maybeSingle();
@@ -80,7 +75,7 @@ bot.command('start', async (ctx) => {
 
   const kb = new InlineKeyboard()
     .webApp('🐿️ Открыть Squirrel Combat', WEBAPP_URL).row()
-    .url('📢 Наш канал', 'https://t.me/your_channel');
+    .url('📢 Наш канал', CHANNEL_URL);
 
   await ctx.reply(
     `🐿️ <b>Squirrel Combat</b>\n\n` +
