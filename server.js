@@ -59,6 +59,12 @@ function auth(req,res,next){
   req.tgId = user.id;
   next();
 }
+
+function adminOnly(req,res,next){
+  if(!ADMIN_IDS.includes(req.tgId)) return res.status(403).json({error:'no'});
+  next();
+}
+
 // ---------- HELPERS ----------
 function regenEnergy(p){
   const t = now();
