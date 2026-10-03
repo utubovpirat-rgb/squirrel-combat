@@ -13,7 +13,7 @@ const fmt = n => { n = Math.floor(n||0); if(n>=1e9) return (n/1e9).toFixed(2)+'B
 const state = {
   player: null, balance: 0, energy: 0, maxEnergy: 1000, perClick: 1, perHour: 0,
   league: 1, tapBuffer: 0, tapTimer: null, activeDuel: null,
-  sound: true, audioCtx: null, lastEnergyToast: 0,
+  sound: true, audioCtx: null, audioUnlocked: false, lastEnergyToast: 0,
   squirrel: {
     rx: 0, ry: 0, vx: 0, vy: 0, dragging: false,
     lastX: 0, lastY: 0, startX: 0, startY: 0, moved: false, lastFrame: 0, idleTs: 0
@@ -25,8 +25,31 @@ function getAudio(){
   if(!state.audioCtx){
     try{ state.audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){}
   }
+  if(state.audioCtx && state.audioCtx.state === 'suspended'){
+    state.audioCtx.resume().catch(()=>{});
+  }
   return state.audioCtx;
 }
+function unlockAudio(){
+  if(state.audioUnlocked) return;
+  const ctx = getAudio();
+  if(ctx){
+    // Тихий "пустой" буфер для активации на iOS/Safari/Telegram WebView
+    try{
+      const buf = ctx.createBuffer(1, 1, 22050);
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(ctx.destination);
+      src.start(0);
+      state.audioUnlocked = true;
+    }catch(e){}
+  }
+}
+// Разблокировка аудио на первый тап по экрану
+document.addEventListener('touchstart', unlockAudio, {once:true});
+document.addEventListener('pointerdown', unlockAudio, {once:true});
+document.addEventListener('click', unlockAudio, {once:true});
+
 function playTick(){
   if(!state.sound) return;
   const ctx = getAudio(); if(!ctx) return;
@@ -36,7 +59,7 @@ function playTick(){
   osc.type = 'square';
   osc.frequency.setValueAtTime(900, t);
   osc.frequency.exponentialRampToValueAtTime(1400, t+0.03);
-  gain.gain.setValueAtTime(0.05, t);
+  gain.gain.setValueAtTime(0.06, t);
   gain.gain.exponentialRampToValueAtTime(0.001, t+0.05);
   osc.connect(gain).connect(ctx.destination);
   osc.start(t); osc.stop(t+0.06);
@@ -50,7 +73,7 @@ function playCoin(){
     const gain = ctx.createGain();
     osc.type = 'triangle';
     osc.frequency.value = f;
-    gain.gain.setValueAtTime(0.08, t+i*0.05);
+    gain.gain.setValueAtTime(0.10, t+i*0.05);
     gain.gain.exponentialRampToValueAtTime(0.001, t+i*0.05+0.08);
     osc.connect(gain).connect(ctx.destination);
     osc.start(t+i*0.05); osc.stop(t+i*0.05+0.09);
@@ -71,7 +94,7 @@ function playWin(big = 1){
     const gain = ctx.createGain();
     osc.frequency.value = f;
     osc.type = 'sine';
-    gain.gain.setValueAtTime(big >= 3 ? 0.20 : 0.15, t);
+    gain.gain.setValueAtTime(big >= 3 ? 0.22 : 0.17, t);
     gain.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
     osc.connect(gain).connect(ctx.destination);
     osc.start(t); osc.stop(t + 0.24);
@@ -85,7 +108,7 @@ function playWin(big = 1){
         const gain = ctx2.createGain();
         osc.frequency.value = f;
         osc.type = 'triangle';
-        gain.gain.setValueAtTime(0.15, t + i*0.08);
+        gain.gain.setValueAtTime(0.17, t + i*0.08);
         gain.gain.exponentialRampToValueAtTime(0.001, t + i*0.08 + 0.3);
         osc.connect(gain).connect(ctx2.destination);
         osc.start(t + i*0.08); osc.stop(t + i*0.08 + 0.32);
@@ -175,6 +198,8 @@ function doTap(x, y){
   const nowT = performance.now();
   if(nowT - lastTapTs < TAP_DEBOUNCE) return;
   lastTapTs = nowT;
+
+  unlockAudio();
 
   if(state.energy <= 0){
     const t = Date.now();
@@ -320,6 +345,7 @@ function attachSquirrelControls(el){
   el.style.cursor = 'grab';
   el.addEventListener('pointerdown', (e)=>{
     e.preventDefault();
+    unlockAudio();
     s.dragging = true;
     s.moved = false;
     s.startX = e.clientX;
@@ -371,7 +397,7 @@ function startSquirrelScene(){
 
   const camera = new THREE.PerspectiveCamera(38, W/H, 0.1, 100);
   camera.position.set(0, 1.15, 4.6);
-  camera.lookAt(0, 0.2, 0);
+  camera.lookAt(0, 0.55, 0);
   squirrelCamera = camera;
 
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
@@ -398,7 +424,6 @@ function startSquirrelScene(){
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.45));
 
-  // Загрузка модели
   const loader = new THREE.GLTFLoader();
   loader.load(SQUIRREL_MODEL_URL, (gltf)=>{
     const model = gltf.scene;
@@ -414,7 +439,7 @@ function startSquirrelScene(){
     box.setFromObject(model);
     box.getCenter(center);
     model.position.x -= center.x * scale;
-    model.position.y -= center.y * scale - 0.35;
+    model.position.y -= center.y * scale - 0.6;
     model.position.z -= center.z * scale;
 
     model.traverse((child)=>{
@@ -439,25 +464,15 @@ function startSquirrelScene(){
     fallbackToEmoji();
   });
 
-  // Жёлтый подиум — широкий круг
-  const podiumGeo = new THREE.CircleGeometry(1.55, 64);
+  // Одна мягкая тень-подиум под белкой
+  const podiumGeo = new THREE.CircleGeometry(1.45, 64);
   const podiumMat = new THREE.MeshBasicMaterial({
-    color: 0xffb84d, transparent: true, opacity: 0.35
+    color: 0xffb84d, transparent: true, opacity: 0.22
   });
   const podium = new THREE.Mesh(podiumGeo, podiumMat);
   podium.rotation.x = -Math.PI / 2;
-  podium.position.y = -1.25;
+  podium.position.y = -1.05;
   scene.add(podium);
-
-  // Внутренний тёплый круг (ярче)
-  const podiumInnerGeo = new THREE.CircleGeometry(1.0, 48);
-  const podiumInnerMat = new THREE.MeshBasicMaterial({
-    color: 0xffd166, transparent: true, opacity: 0.25
-  });
-  const podiumInner = new THREE.Mesh(podiumInnerGeo, podiumInnerMat);
-  podiumInner.rotation.x = -Math.PI / 2;
-  podiumInner.position.y = -1.24;
-  scene.add(podiumInner);
 
   if(!squirrelLoopStarted){
     squirrelLoopStarted = true;
@@ -510,6 +525,7 @@ function animateSquirrelLoop(){
 
 // ============ КНОПКИ ШАПКИ ============
 $('bonusBtn').onclick = async ()=>{
+  unlockAudio();
   try{
     const r = await api('/api/bonus');
     if(r.ok){
@@ -521,11 +537,13 @@ $('bonusBtn').onclick = async ()=>{
   }catch(e){ toast('Ошибка: '+e.message); }
 };
 $('soundBtn').onclick = ()=>{
+  unlockAudio();
   state.sound = !state.sound;
   $('soundBtn').textContent = state.sound ? '🔊' : '🔇';
   if(state.sound) playTick();
 };
 $('claimBtn').onclick = async ()=>{
+  unlockAudio();
   try{
     const r = await api('/api/passive');
     if(r.ok){
@@ -537,6 +555,7 @@ $('claimBtn').onclick = async ()=>{
   }catch(e){ toast('Ошибка: '+e.message); }
 };
 $('boostBtn').onclick = async ()=>{
+  unlockAudio();
   try{
     await api('/api/boost-energy');
     toast('⚡ Энергия восстановлена', 'green');
@@ -558,7 +577,7 @@ function buildTabs(){
   $('tabs').innerHTML = TABS.map(([id,ic,lbl])=>
     `<button data-tab="${id}" class="${id==='home'?'on':''}">${ic} ${lbl}</button>`).join('');
   document.querySelectorAll('#tabs button').forEach(b=>{
-    b.onclick = ()=>go(b.dataset.tab);
+    b.onclick = ()=>{ unlockAudio(); go(b.dataset.tab); };
   });
 }
 function go(tab){
@@ -614,6 +633,7 @@ async function renderTab(tab){
     }).join('') || '<div class="empty"><div class="ic">🏦</div>Каталог пуст</div>';
     c.querySelectorAll('button[data-card]').forEach(btn=>{
       btn.onclick = async ()=>{
+        unlockAudio();
         btn.disabled = true;
         try{ await api('/api/buy-card', {cardId:btn.dataset.card}); playWin(2); await loadMe(); renderTab('cards'); }
         catch(e){ toast(e.message, 'pink'); btn.disabled = false; }
@@ -635,9 +655,9 @@ async function renderTab(tab){
         <div class="info"><div class="t">Премиум 30 дней</div>
         <div class="d">×2 тап · 30 000 🐿️</div></div>
         <button id="bPm">Купить</button></div>`;
-    $('bEn').onclick = async ()=>{ try{ await api('/api/boost-energy'); playCoin(); loadMe(); renderTab('boosts'); }catch(e){ toast(e.message); } };
-    $('bTb').onclick = async ()=>{ try{ await api('/api/boost-turbo'); playWin(1); loadMe(); renderTab('boosts'); }catch(e){ toast(e.message); } };
-    $('bPm').onclick = async ()=>{ try{ await api('/api/premium/buy',{days:30}); playWin(2); loadMe(); renderTab('boosts'); }catch(e){ toast(e.message); } };
+    $('bEn').onclick = async ()=>{ unlockAudio(); try{ await api('/api/boost-energy'); playCoin(); loadMe(); renderTab('boosts'); }catch(e){ toast(e.message); } };
+    $('bTb').onclick = async ()=>{ unlockAudio(); try{ await api('/api/boost-turbo'); playWin(1); loadMe(); renderTab('boosts'); }catch(e){ toast(e.message); } };
+    $('bPm').onclick = async ()=>{ unlockAudio(); try{ await api('/api/premium/buy',{days:30}); playWin(2); loadMe(); renderTab('boosts'); }catch(e){ toast(e.message); } };
   }
 
   else if(tab === 'session'){
@@ -668,12 +688,13 @@ async function renderTab(tab){
           <div class="info"><div class="t">Улучшить скорость</div>
           <div class="d">Текущий: ×${s.mult} · ур.${s.speedLevel}</div></div>
           <button id="sUpg" ${s.speedLevel>=5?'disabled':''}>${s.speedLevel>=5?'MAX':'Улучшить'}</button></div>`;
-      $('sStart').onclick = async ()=>{ try{ await api('/api/session/start'); playCoin(); renderTab('session'); }catch(e){ toast(e.message); } };
+      $('sStart').onclick = async ()=>{ unlockAudio(); try{ await api('/api/session/start'); playCoin(); renderTab('session'); }catch(e){ toast(e.message); } };
       $('sClaim').onclick = async ()=>{
+        unlockAudio();
         try{ const r = await api('/api/session/claim'); toast('💤 +'+fmt(r.gain),'gold'); playRewardSound(r.gain); await loadMe(); renderTab('session'); }
         catch(e){ toast(e.message, 'pink'); }
       };
-      $('sUpg').onclick = async ()=>{ try{ await api('/api/session/upgrade'); playWin(1); renderTab('session'); }catch(e){ toast(e.message); } };
+      $('sUpg').onclick = async ()=>{ unlockAudio(); try{ await api('/api/session/upgrade'); playWin(1); renderTab('session'); }catch(e){ toast(e.message); } };
     }catch(e){ c.innerHTML = '<div class="empty"><div class="ic">💤</div>Ошибка загрузки</div>'; }
   }
 
@@ -691,6 +712,7 @@ async function renderTab(tab){
         <div class="info"><div class="t">Моя статистика</div>
         <div class="d">${p.pvp_wins||0}W / ${p.pvp_losses||0}L · рейтинг ${p.pvp_rating||1000}</div></div></div>`;
     $('dCreate').onclick = async ()=>{
+      unlockAudio();
       const stake = parseInt(prompt('Ставка (мин 1000):','1000')||'0');
       if(stake < 1000) return;
       try{ const r = await api('/api/duel/create', {stake}); state.activeDuel = r.id;
@@ -698,6 +720,7 @@ async function renderTab(tab){
       catch(e){ toast(e.message, 'pink'); }
     };
     $('dJoin').onclick = async ()=>{
+      unlockAudio();
       const id = prompt('ID дуэли:'); if(!id) return;
       state.activeDuel = id;
       try{ await api('/api/duel/join', {id}); renderDuelGame(c); }
@@ -717,6 +740,7 @@ async function renderTab(tab){
           <div class="section-title">Топ кланов</div>
           <div id="cList">Загрузка...</div>`;
         $('cCreate').onclick = async ()=>{
+          unlockAudio();
           const name = prompt('Название (до 30):'); if(!name) return;
           const tag = prompt('Тег (до 5):'); if(!tag) return;
           try{ await api('/api/clan/create',{name,tag}); playWin(2); renderTab('clan'); }
@@ -731,7 +755,7 @@ async function renderTab(tab){
             <button data-join="${cl.id}">Войти</button>
           </div>`).join('') : '<div class="empty"><div class="ic">🛡️</div>Пока пусто</div>';
         c.querySelectorAll('[data-join]').forEach(b=>{
-          b.onclick = async ()=>{ try{ await api('/api/clan/join',{clanId:b.dataset.join}); playCoin(); renderTab('clan'); }
+          b.onclick = async ()=>{ unlockAudio(); try{ await api('/api/clan/join',{clanId:b.dataset.join}); playCoin(); renderTab('clan'); }
             catch(e){ toast(e.message); } };
         });
       } else {
@@ -755,12 +779,14 @@ async function renderTab(tab){
             <div class="row"><span>${m.role==='owner'?'👑':m.role==='officer'?'⭐':'🐿️'} ${m.name}</span>
             <span style="color:#ffd166">${fmt(m.contribution)}</span></div>`).join('')}`;
         $('cDon').onclick = async ()=>{
+          unlockAudio();
           const amt = parseInt(prompt('Сумма:','5000')||'0');
           if(amt < 1000) return;
           try{ await api('/api/clan/donate',{amount:amt}); playCoin(); await loadMe(); renderTab('clan'); }
           catch(e){ toast(e.message); }
         };
         $('cLeave').onclick = async ()=>{
+          unlockAudio();
           if(!confirm('Выйти из клана?')) return;
           await api('/api/clan/leave'); renderTab('clan');
         };
@@ -790,6 +816,7 @@ async function renderTab(tab){
       }).join('');
       c.querySelectorAll('[data-q]').forEach(b=>{
         b.onclick = async ()=>{
+          unlockAudio();
           try{ const r = await api('/api/daily/claim',{id:b.dataset.q});
             toast('+'+fmt(r.reward), 'gold'); playRewardSound(r.reward); await loadMe(); renderTab('daily'); }
           catch(e){ toast(e.message); }
@@ -873,6 +900,7 @@ async function renderTab(tab){
         </div>`;
       requestAnimationFrame(()=>drawWheel(info.prizes));
       if(info.ready) $('spinBtn').onclick = async ()=>{
+        unlockAudio();
         $('spinBtn').disabled = true;
         try{
           const r = await api('/api/wheel/spin');
@@ -895,6 +923,7 @@ async function renderTab(tab){
         <button id="promoBtn" class="qb" style="margin-top:12px;padding:14px;background:linear-gradient(135deg,#ffb84d,#ff9e00);color:#3a1e00;border-radius:10px">Активировать</button>
       </div>`;
     $('promoBtn').onclick = async ()=>{
+      unlockAudio();
       const code = $('promoInput').value.trim();
       if(!code) return;
       try{
@@ -938,7 +967,7 @@ async function renderTab(tab){
             ${r.lvl1.slice(0,10).map(p=>`${p.first_name||'?'} · ${fmt(p.total_earned)}`).join('<br>')||'Никого'}
           </div>
         </div>`;
-      $('refCopy').onclick = ()=>{ navigator.clipboard?.writeText(link); toast('Скопировано','green'); };
+      $('refCopy').onclick = ()=>{ unlockAudio(); navigator.clipboard?.writeText(link); toast('Скопировано','green'); };
     }catch(e){ c.innerHTML = '<div class="empty"><div class="ic">🔗</div>Ошибка</div>'; }
   }
 
@@ -983,6 +1012,7 @@ async function renderTab(tab){
             <button id="chCreate" class="qb" style="padding:14px;background:linear-gradient(135deg,#ffb84d,#ff9e00);color:#3a1e00">Создать</button>
           </div>`;
         $('chCreate').onclick = async ()=>{
+          unlockAudio();
           try{ await api('/api/channel/create',{title:$('chTitle').value,username:$('chUser').value}); playCoin(); renderTab('channel'); }
           catch(e){ toast(e.message); }
         };
@@ -1010,8 +1040,9 @@ async function renderTab(tab){
           <div class="card"><div class="ic">💸</div>
             <div class="info"><div class="t">Вывод</div><div class="d">Мин. 10 000</div></div>
             <button id="chWd">Вывести</button></div>`;
-        $('chCopy').onclick = ()=>{ navigator.clipboard?.writeText(ch.link); toast('Скопировано'); };
+        $('chCopy').onclick = ()=>{ unlockAudio(); navigator.clipboard?.writeText(ch.link); toast('Скопировано'); };
         $('chWd').onclick = async ()=>{
+          unlockAudio();
           const amt = parseInt(prompt('Сумма:','10000')||'0');
           if(amt < 10000) return;
           try{ await api('/api/channel/withdraw',{amount:amt}); renderTab('channel'); toast('Заявка отправлена','green'); }
@@ -1054,6 +1085,7 @@ async function renderTab(tab){
       <div class="row"><span>Рефералов</span><b>${p.referrals||0}</b></div>
       <button id="langBtn" class="qb" style="margin-top:14px;padding:14px">🌐 Сменить язык</button>`;
     $('langBtn').onclick = async ()=>{
+      unlockAudio();
       const l = prompt('ru / en / es', p.lang||'ru');
       if(!l) return;
       try{ await api('/api/lang/set',{lang:l}); toast('Язык сохранён','green'); }
@@ -1113,13 +1145,14 @@ async function renderDuelGame(c){
   const sq = $('dSq');
   sq.addEventListener('pointerdown', ()=>{
     if(!running) return;
+    unlockAudio();
     $('dMy').textContent = (+$('dMy').textContent||0) + 1;
     tapBuf++;
     playTick();
     navigator.vibrate?.(6);
     if(!tapTimer) tapTimer = setTimeout(sendTap, 200);
   });
-  $('dLeave').onclick = ()=>{ state.activeDuel = null; renderTab('duel'); };
+  $('dLeave').onclick = ()=>{ unlockAudio(); state.activeDuel = null; renderTab('duel'); };
   const iv = setInterval(refresh, 700);
   c.__cleanup = ()=>clearInterval(iv);
   refresh();
