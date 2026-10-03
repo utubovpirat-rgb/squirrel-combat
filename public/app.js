@@ -1,4 +1,4 @@
-// app.js — фронт Squirrel Combat (версия без 3D-белки, все табы рабочие)
+// app.js — фронт Squirrel Combat (версия с 3D-белкой)
 const tg = window.Telegram?.WebApp;
 tg?.ready(); tg?.expand();
 tg?.setHeaderColor?.('#0a0a12');
@@ -13,7 +13,18 @@ const fmt = n => { n = Math.floor(n||0); if(n>=1e9) return (n/1e9).toFixed(2)+'B
 const state = {
   player: null, balance: 0, energy: 0, maxEnergy: 1000, perClick: 1, perHour: 0,
   league: 1, tapBuffer: 0, tapTimer: null, activeDuel: null,
-  sound: true, audioCtx: null, lastEnergyToast: 0
+  sound: true, audioCtx: null, lastEnergyToast: 0,
+  squirrel: {
+    rx: 0, ry: 0,       // текущий наклон
+    trx: 0, try_: 0,    // целевой наклон (для инерции)
+    vx: 0, vy: 0,       // скорость
+    dragging: false,
+    lastX: 0, lastY: 0,
+    startX: 0, startY: 0,
+    moved: false,
+    lastFrame: 0,
+    idleTs: 0
+  }
 };
 
 // ============ ЗВУК ============
@@ -52,20 +63,54 @@ function playCoin(){
     osc.start(t+i*0.05); osc.stop(t+i*0.05+0.09);
   });
 }
-function playWin(){
+
+// ПОБЕДНЫЙ ЗВУК — для больших выигрышей (масштабируется по размеру)
+function playWin(big = 1){
   if(!state.sound) return;
   const ctx = getAudio(); if(!ctx) return;
-  [523,659,784].forEach((f,i)=>{
-    const t = ctx.currentTime + i*0.08;
+  // big: 1 = обычный, 2 = крупный, 3 = джекпот
+  const scale = big >= 3
+    ? [523, 659, 784, 1046, 1318, 1568, 2093]
+    : big >= 2
+    ? [523, 659, 784, 1046, 1318]
+    : [523, 659, 784];
+  const spacing = big >= 3 ? 0.11 : big >= 2 ? 0.10 : 0.08;
+  scale.forEach((f, i)=>{
+    const t = ctx.currentTime + i*spacing;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.frequency.value = f;
     osc.type = 'sine';
-    gain.gain.setValueAtTime(0.15, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t+0.2);
+    gain.gain.setValueAtTime(big >= 3 ? 0.20 : 0.15, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
     osc.connect(gain).connect(ctx.destination);
-    osc.start(t); osc.stop(t+0.22);
+    osc.start(t); osc.stop(t + 0.24);
   });
+  // финальный акцент для крупных
+  if(big >= 2){
+    setTimeout(()=>{
+      const ctx2 = getAudio(); if(!ctx2) return;
+      const t = ctx2.currentTime;
+      [1046, 1568].forEach((f, i)=>{
+        const osc = ctx2.createOscillator();
+        const gain = ctx2.createGain();
+        osc.frequency.value = f;
+        osc.type = 'triangle';
+        gain.gain.setValueAtTime(0.15, t + i*0.08);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + i*0.08 + 0.3);
+        osc.connect(gain).connect(ctx2.destination);
+        osc.start(t + i*0.08); osc.stop(t + i*0.08 + 0.32);
+      });
+    }, scale.length * spacing * 1000 + 30);
+  }
+}
+
+// Проверка размера выигрыша для звука
+function playRewardSound(amount){
+  if(amount >= 1000000) playWin(3);
+  else if(amount >= 100000) playWin(2);
+  else if(amount >= 5000) playWin(1);
+  else playCoin();
 }
 
 // ============ DEVICE / API ============
@@ -167,6 +212,14 @@ function doTap(x, y){
   playTick();
   navigator.vibrate?.(6);
 
+  // Анимация тапа — SVG сжимается
+  const svg = document.getElementById('squirrelSvg');
+  if(svg){
+    svg.style.transition = 'transform .08s';
+    svg.style.transform += ' scale(.94)';
+    setTimeout(()=>{ svg.style.transition = 'transform .18s'; svg.style.transform = svg.style.transform.replace(/ scale\(\.94\)/, ''); }, 80);
+  }
+
   state.tapBuffer++;
   if(!tapFlushTimer) tapFlushTimer = setTimeout(flushTaps, SEND_INTERVAL);
 }
@@ -209,38 +262,244 @@ function spawnFloat(x, y, text){
 function spawnCoinBurst(x, y){
   const layer = $('floatLayer'); if(!layer) return;
   const r = layer.getBoundingClientRect();
-  for(let i=0;i<3;i++){
+  for(let i=0;i<4;i++){
     const el = document.createElement('div');
     el.className = 'coin-fx';
-    el.textContent = ['🪙','⭐','✨'][i];
+    el.textContent = ['🪙','⭐','✨','💰'][i];
     el.style.left = (x - r.left)+'px';
     el.style.top = (y - r.top)+'px';
-    el.style.setProperty('--dx', (Math.random()*80-40)+'px');
-    el.style.setProperty('--dy', (-60 - Math.random()*40)+'px');
+    el.style.setProperty('--dx', (Math.random()*100-50)+'px');
+    el.style.setProperty('--dy', (-80 - Math.random()*60)+'px');
     layer.appendChild(el);
-    setTimeout(()=>el.remove(), 850);
+    setTimeout(()=>el.remove(), 900);
   }
 }
 
-// ============ TAP-POINT (белка через эмодзи-кнопку + canvas пустой) ============
-function attachSquirrelTap(){
+// ============ 3D-БЕЛКА SVG ============
+function initSquirrel3D(){
   const wrap = document.querySelector('.squirrel-wrap');
   if(!wrap) return;
-  const canvas = $('squirrel3d');
-  // Если canvas есть — цепляем на canvas, если нет — на wrap
-  const target = canvas || wrap;
-  target.style.touchAction = 'none';
-  target.addEventListener('pointerdown', (e)=>{
+
+  wrap.innerHTML = `
+    <svg id="squirrelSvg" viewBox="0 0 260 260" xmlns="http://www.w3.org/2000/svg"
+      style="width:100%;max-width:320px;height:auto;display:block;
+      filter:drop-shadow(0 18px 30px rgba(255,180,80,.4));
+      transform-style:preserve-3d;will-change:transform;">
+      <defs>
+        <radialGradient id="bodyGrad" cx="45%" cy="35%" r="65%">
+          <stop offset="0%" stop-color="#d9a86c"/>
+          <stop offset="60%" stop-color="#b07f45"/>
+          <stop offset="100%" stop-color="#7a5328"/>
+        </radialGradient>
+        <radialGradient id="bellyGrad" cx="50%" cy="40%" r="60%">
+          <stop offset="0%" stop-color="#ffeac8"/>
+          <stop offset="100%" stop-color="#e8c79a"/>
+        </radialGradient>
+        <radialGradient id="tailGrad" cx="40%" cy="30%" r="70%">
+          <stop offset="0%" stop-color="#c99b5f"/>
+          <stop offset="60%" stop-color="#a06f35"/>
+          <stop offset="100%" stop-color="#6b3f18"/>
+        </radialGradient>
+        <radialGradient id="earGrad" cx="40%" cy="30%" r="70%">
+          <stop offset="0%" stop-color="#e8b878"/>
+          <stop offset="100%" stop-color="#9c6828"/>
+        </radialGradient>
+        <radialGradient id="nutGrad" cx="40%" cy="30%" r="60%">
+          <stop offset="0%" stop-color="#e08a3a"/>
+          <stop offset="60%" stop-color="#a55b1e"/>
+          <stop offset="100%" stop-color="#6b3510"/>
+        </radialGradient>
+        <radialGradient id="eyeGrad" cx="35%" cy="35%" r="60%">
+          <stop offset="0%" stop-color="#ffffff"/>
+          <stop offset="100%" stop-color="#eaeaf5"/>
+        </radialGradient>
+        <radialGradient id="eyeGlow" cx="35%" cy="35%" r="60%">
+          <stop offset="0%" stop-color="#0a0a12"/>
+          <stop offset="100%" stop-color="#000000"/>
+        </radialGradient>
+      </defs>
+
+      <!-- ХВОСТ (сзади) -->
+      <g id="tail">
+        <path d="M 170 165 Q 240 130 235 75 Q 232 35 200 30 Q 175 28 175 55 Q 178 90 155 120 Z"
+          fill="url(#tailGrad)" stroke="#5a3413" stroke-width="2"/>
+        <path d="M 195 55 Q 205 50 210 62 Q 208 80 190 95"
+          fill="none" stroke="#e8c79a" stroke-width="3" opacity=".5"/>
+      </g>
+
+      <!-- ТЕЛО -->
+      <ellipse id="body" cx="130" cy="170" rx="62" ry="55" fill="url(#bodyGrad)" stroke="#5a3413" stroke-width="2.5"/>
+      <ellipse cx="130" cy="180" rx="42" ry="38" fill="url(#bellyGrad)" opacity=".95"/>
+
+      <!-- ЛАПЫ -->
+      <ellipse cx="105" cy="215" rx="18" ry="10" fill="#7a5328" stroke="#4a2a10" stroke-width="2"/>
+      <ellipse cx="155" cy="215" rx="18" ry="10" fill="#7a5328" stroke="#4a2a10" stroke-width="2"/>
+
+      <!-- ОРЕХ В ЛАПАХ -->
+      <g id="nut">
+        <ellipse cx="130" cy="200" rx="20" ry="18" fill="url(#nutGrad)" stroke="#4a2a10" stroke-width="2"/>
+        <path d="M 120 195 Q 130 185 140 195 Q 130 205 120 195 Z" fill="#c47330" opacity=".7"/>
+        <line x1="130" y1="182" x2="130" y2="192" stroke="#4a2a10" stroke-width="1.5" opacity=".6"/>
+      </g>
+
+      <!-- ЛАПКИ ПЕРЕД ОРЕХОМ -->
+      <ellipse cx="112" cy="195" rx="9" ry="7" fill="#e8b878" stroke="#5a3413" stroke-width="1.5"/>
+      <ellipse cx="148" cy="195" rx="9" ry="7" fill="#e8b878" stroke="#5a3413" stroke-width="1.5"/>
+
+      <!-- УШИ -->
+      <path d="M 88 115 Q 82 75 100 68 Q 112 72 112 105 Z"
+        fill="url(#earGrad)" stroke="#5a3413" stroke-width="2"/>
+      <path d="M 172 115 Q 178 75 160 68 Q 148 72 148 105 Z"
+        fill="url(#earGrad)" stroke="#5a3413" stroke-width="2"/>
+      <path d="M 92 108 Q 88 82 100 78 Q 106 82 104 104 Z" fill="#3a1e0a" opacity=".5"/>
+      <path d="M 168 108 Q 172 82 160 78 Q 154 82 156 104 Z" fill="#3a1e0a" opacity=".5"/>
+
+      <!-- ГОЛОВА -->
+      <ellipse id="head" cx="130" cy="125" rx="52" ry="48" fill="url(#bodyGrad)" stroke="#5a3413" stroke-width="2.5"/>
+      <ellipse cx="130" cy="138" rx="32" ry="26" fill="url(#bellyGrad)" opacity=".8"/>
+
+      <!-- ГЛАЗА -->
+      <g id="eyeL">
+        <ellipse cx="112" cy="120" rx="11" ry="13" fill="url(#eyeGrad)" stroke="#3a1e0a" stroke-width="1.5"/>
+        <ellipse id="pupilL" cx="113" cy="122" rx="6" ry="8" fill="url(#eyeGlow)"/>
+        <ellipse cx="110" cy="117" rx="2.5" ry="2.5" fill="#fff" opacity=".9"/>
+      </g>
+      <g id="eyeR">
+        <ellipse cx="148" cy="120" rx="11" ry="13" fill="url(#eyeGrad)" stroke="#3a1e0a" stroke-width="1.5"/>
+        <ellipse id="pupilR" cx="147" cy="122" rx="6" ry="8" fill="url(#eyeGlow)"/>
+        <ellipse cx="144" cy="117" rx="2.5" ry="2.5" fill="#fff" opacity=".9"/>
+      </g>
+
+      <!-- БРОВКИ -->
+      <path d="M 100 105 Q 110 100 120 105" fill="none" stroke="#5a3413" stroke-width="2" stroke-linecap="round"/>
+      <path d="M 140 105 Q 150 100 160 105" fill="none" stroke="#5a3413" stroke-width="2" stroke-linecap="round"/>
+
+      <!-- НОС -->
+      <ellipse cx="130" cy="138" rx="7" ry="5" fill="#3a1e0a"/>
+      <ellipse cx="128" cy="137" rx="2" ry="1.5" fill="#7a5328" opacity=".7"/>
+
+      <!-- РОТ -->
+      <path d="M 122 146 Q 130 152 138 146" fill="none" stroke="#3a1e0a" stroke-width="2" stroke-linecap="round"/>
+
+      <!-- УСИКИ -->
+      <line x1="115" y1="140" x2="98" y2="136" stroke="#5a3413" stroke-width="1.5" stroke-linecap="round"/>
+      <line x1="115" y1="143" x2="97" y2="143" stroke="#5a3413" stroke-width="1.5" stroke-linecap="round"/>
+      <line x1="145" y1="140" x2="162" y2="136" stroke="#5a3413" stroke-width="1.5" stroke-linecap="round"/>
+      <line x1="145" y1="143" x2="163" y2="143" stroke="#5a3413" stroke-width="1.5" stroke-linecap="round"/>
+
+      <!-- ЩЁКИ-РУМЯНЕЦ -->
+      <ellipse cx="100" cy="140" rx="8" ry="5" fill="#ff9e9e" opacity=".35"/>
+      <ellipse cx="160" cy="140" rx="8" ry="5" fill="#ff9e9e" opacity=".35"/>
+    </svg>
+
+    <div id="floatLayer"></div>
+    <div class="hint">↔ Поверни пальцем</div>
+  `;
+
+  const svg = document.getElementById('squirrelSvg');
+  const s = state.squirrel;
+
+  // Управление
+  svg.style.touchAction = 'none';
+
+  svg.addEventListener('pointerdown', (e)=>{
     e.preventDefault();
-    doTap(e.clientX, e.clientY);
-  }, {passive:false});
+    s.dragging = true;
+    s.moved = false;
+    s.startX = e.clientX;
+    s.startY = e.clientY;
+    s.lastX = e.clientX;
+    s.lastY = e.clientY;
+    s.vx = 0;
+    s.vy = 0;
+    s.idleTs = 0;
+    svg.setPointerCapture(e.pointerId);
+  });
+
+  svg.addEventListener('pointermove', (e)=>{
+    if(!s.dragging) return;
+    const dx = e.clientX - s.lastX;
+    const dy = e.clientY - s.lastY;
+    s.lastX = e.clientX;
+    s.lastY = e.clientY;
+
+    if(Math.abs(e.clientX - s.startX) > 6 || Math.abs(e.clientY - s.startY) > 6){
+      s.moved = true;
+    }
+
+    s.ry += dx * 0.8;
+    s.rx -= dy * 0.6;
+    s.rx = Math.max(-60, Math.min(60, s.rx));
+    s.ry = Math.max(-180, Math.min(180, s.ry));
+
+    s.vx = dx * 0.6;
+    s.vy = -dy * 0.4;
+  });
+
+  svg.addEventListener('pointerup', (e)=>{
+    if(!s.dragging) return;
+    s.dragging = false;
+    svg.releasePointerCapture?.(e.pointerId);
+
+    if(!s.moved){
+      // это был тап, не свайп
+      doTap(e.clientX, e.clientY);
+    }
+    s.idleTs = performance.now();
+  });
+  svg.addEventListener('pointercancel', ()=>{
+    s.dragging = false;
+  });
+
+  s.lastFrame = performance.now();
+  requestAnimationFrame(animateSquirrel);
+}
+
+function animateSquirrel(now){
+  const s = state.squirrel;
+  if(!s.lastFrame) s.lastFrame = now;
+  const dt = Math.min(50, now - s.lastFrame) / 16;
+  s.lastFrame = now;
+
+  // Инерция
+  if(!s.dragging){
+    s.ry += s.vx * dt;
+    s.rx += s.vy * dt;
+    s.vx *= 0.94;
+    s.vy *= 0.94;
+    if(Math.abs(s.vx) < 0.05) s.vx = 0;
+    if(Math.abs(s.vy) < 0.05) s.vy = 0;
+
+    // Возврат к 0 если idle долго
+    if(s.idleTs && now - s.idleTs > 2500){
+      s.rx *= 0.92;
+      s.ry *= 0.92;
+      if(Math.abs(s.rx) < 0.1 && Math.abs(s.ry) < 0.1){
+        // idle-анимация «дыхание»
+        s.rx = Math.sin(now / 1200) * 1.5;
+        s.ry = Math.cos(now / 1400) * 2;
+      }
+    }
+    s.rx = Math.max(-60, Math.min(60, s.rx));
+  }
+
+  const svg = document.getElementById('squirrelSvg');
+  if(svg){
+    svg.style.transform = `perspective(900px) rotateX(${s.rx}deg) rotateY(${s.ry}deg)`;
+  }
+
+  requestAnimationFrame(animateSquirrel);
 }
 
 // ============ КНОПКИ ШАПКИ ============
 $('bonusBtn').onclick = async ()=>{
   try{
     const r = await api('/api/bonus');
-    if(r.ok){ toast(`🎁 +${fmt(r.reward)} (серия ${r.streak})`, 'gold', 4000); loadMe(); }
+    if(r.ok){
+      toast(`🎁 +${fmt(r.reward)} (серия ${r.streak})`, 'gold', 4000);
+      playRewardSound(r.reward);
+      loadMe();
+    }
     else toast(`Через ${Math.ceil(r.next/3600)}ч`);
   }catch(e){ toast('Ошибка: '+e.message); }
 };
@@ -253,7 +512,11 @@ $('soundBtn').onclick = ()=>{
 $('claimBtn').onclick = async ()=>{
   try{
     const r = await api('/api/passive');
-    if(r.ok){ toast(`💤 +${fmt(r.gain)}`, 'green', 3000); playCoin(); loadMe(); }
+    if(r.ok){
+      toast(`💤 +${fmt(r.gain)}`, 'green', 3000);
+      playRewardSound(r.gain);
+      loadMe();
+    }
     else toast('Пока нечего собирать');
   }catch(e){ toast('Ошибка: '+e.message); }
 };
@@ -261,6 +524,7 @@ $('boostBtn').onclick = async ()=>{
   try{
     await api('/api/boost-energy');
     toast('⚡ Энергия восстановлена', 'green');
+    playCoin();
     loadMe();
   }catch(e){ toast(e.message); }
 };
@@ -299,7 +563,7 @@ function go(tab){
   renderTab(tab);
 }
 
-// ============ КАТАЛОГ КАРТОЧЕК ============
+// ============ КАТАЛОГ ============
 const CARDS_CACHE = {};
 async function loadCatalog(){
   if(CARDS_CACHE.cards) return CARDS_CACHE;
@@ -314,7 +578,7 @@ async function loadCatalog(){
   return CARDS_CACHE;
 }
 
-// ============ РЕНДЕР ТАБОВ ============
+// ============ РЕНДЕР ============
 async function renderTab(tab){
   const c = $('p-'+tab); if(!c) return;
   if(c.__cleanup){ c.__cleanup(); c.__cleanup = null; }
@@ -347,7 +611,12 @@ async function renderTab(tab){
     c.querySelectorAll('button[data-card]').forEach(btn=>{
       btn.onclick = async ()=>{
         btn.disabled = true;
-        try{ await api('/api/buy-card', {cardId:btn.dataset.card}); playCoin(); await loadMe(); renderTab('cards'); }
+        try{
+          await api('/api/buy-card', {cardId:btn.dataset.card});
+          playWin(2);
+          await loadMe();
+          renderTab('cards');
+        }
         catch(e){ toast(e.message, 'pink'); btn.disabled = false; }
       };
     });
@@ -368,8 +637,8 @@ async function renderTab(tab){
         <div class="d">×2 тап · 30 000 🐿️</div></div>
         <button id="bPm">Купить</button></div>`;
     $('bEn').onclick = async ()=>{ try{ await api('/api/boost-energy'); playCoin(); loadMe(); renderTab('boosts'); }catch(e){ toast(e.message); } };
-    $('bTb').onclick = async ()=>{ try{ await api('/api/boost-turbo'); playCoin(); loadMe(); renderTab('boosts'); }catch(e){ toast(e.message); } };
-    $('bPm').onclick = async ()=>{ try{ await api('/api/premium/buy',{days:30}); loadMe(); renderTab('boosts'); }catch(e){ toast(e.message); } };
+    $('bTb').onclick = async ()=>{ try{ await api('/api/boost-turbo'); playWin(1); loadMe(); renderTab('boosts'); }catch(e){ toast(e.message); } };
+    $('bPm').onclick = async ()=>{ try{ await api('/api/premium/buy',{days:30}); playWin(2); loadMe(); renderTab('boosts'); }catch(e){ toast(e.message); } };
   }
 
   else if(tab === 'session'){
@@ -400,12 +669,18 @@ async function renderTab(tab){
           <div class="info"><div class="t">Улучшить скорость</div>
           <div class="d">Текущий: ×${s.mult} · ур.${s.speedLevel}</div></div>
           <button id="sUpg" ${s.speedLevel>=5?'disabled':''}>${s.speedLevel>=5?'MAX':'Улучшить'}</button></div>`;
-      $('sStart').onclick = async ()=>{ try{ await api('/api/session/start'); renderTab('session'); }catch(e){ toast(e.message); } };
+      $('sStart').onclick = async ()=>{ try{ await api('/api/session/start'); playCoin(); renderTab('session'); }catch(e){ toast(e.message); } };
       $('sClaim').onclick = async ()=>{
-        try{ const r = await api('/api/session/claim'); toast('💤 +'+fmt(r.gain),'gold'); playCoin(); await loadMe(); renderTab('session'); }
+        try{
+          const r = await api('/api/session/claim');
+          toast('💤 +'+fmt(r.gain),'gold');
+          playRewardSound(r.gain);
+          await loadMe();
+          renderTab('session');
+        }
         catch(e){ toast(e.message, 'pink'); }
       };
-      $('sUpg').onclick = async ()=>{ try{ await api('/api/session/upgrade'); renderTab('session'); }catch(e){ toast(e.message); } };
+      $('sUpg').onclick = async ()=>{ try{ await api('/api/session/upgrade'); playWin(1); renderTab('session'); }catch(e){ toast(e.message); } };
     }catch(e){ c.innerHTML = '<div class="empty"><div class="ic">💤</div>Ошибка загрузки</div>'; }
   }
 
@@ -454,7 +729,7 @@ async function renderTab(tab){
         $('cCreate').onclick = async ()=>{
           const name = prompt('Название (до 30):'); if(!name) return;
           const tag = prompt('Тег (до 5):'); if(!tag) return;
-          try{ await api('/api/clan/create',{name,tag}); renderTab('clan'); }
+          try{ await api('/api/clan/create',{name,tag}); playWin(2); renderTab('clan'); }
           catch(e){ toast(e.message, 'pink'); }
         };
         const list = await fetch('/api/clan/list', {headers:{'X-Init-Data':initData}}).then(r=>r.json()).catch(()=>[]);
@@ -466,7 +741,7 @@ async function renderTab(tab){
             <button data-join="${cl.id}">Войти</button>
           </div>`).join('') : '<div class="empty"><div class="ic">🛡️</div>Пока пусто</div>';
         c.querySelectorAll('[data-join]').forEach(b=>{
-          b.onclick = async ()=>{ try{ await api('/api/clan/join',{clanId:b.dataset.join}); renderTab('clan'); }
+          b.onclick = async ()=>{ try{ await api('/api/clan/join',{clanId:b.dataset.join}); playCoin(); renderTab('clan'); }
             catch(e){ toast(e.message); } };
         });
       } else {
@@ -492,7 +767,7 @@ async function renderTab(tab){
         $('cDon').onclick = async ()=>{
           const amt = parseInt(prompt('Сумма:','5000')||'0');
           if(amt < 1000) return;
-          try{ await api('/api/clan/donate',{amount:amt}); await loadMe(); renderTab('clan'); }
+          try{ await api('/api/clan/donate',{amount:amt}); playCoin(); await loadMe(); renderTab('clan'); }
           catch(e){ toast(e.message); }
         };
         $('cLeave').onclick = async ()=>{
@@ -505,9 +780,7 @@ async function renderTab(tab){
 
   else if(tab === 'daily'){
     try{
-      console.log('daily tab opened');
-      const list = await fetch('/api/daily/list',{headers:{'X-Init-Data':initData}}).then(r=>r.json()).catch(e=>{ console.error('daily fetch error', e); return []; });
-      console.log('daily list:', list);
+      const list = await fetch('/api/daily/list',{headers:{'X-Init-Data':initData}}).then(r=>r.json()).catch(()=>[]);
       if(!list.length){ c.innerHTML = '<div class="empty"><div class="ic">📅</div>Нет заданий на сегодня</div>'; return; }
       c.innerHTML = list.map(q=>{
         const pct = q.goal? Math.min(100, q.progress/q.goal*100) : 0;
@@ -527,12 +800,17 @@ async function renderTab(tab){
       }).join('');
       c.querySelectorAll('[data-q]').forEach(b=>{
         b.onclick = async ()=>{
-          try{ const r = await api('/api/daily/claim',{id:b.dataset.q});
-            toast('+'+fmt(r.reward), 'gold'); playCoin(); await loadMe(); renderTab('daily'); }
+          try{
+            const r = await api('/api/daily/claim',{id:b.dataset.q});
+            toast('+'+fmt(r.reward), 'gold');
+            playRewardSound(r.reward);
+            await loadMe();
+            renderTab('daily');
+          }
           catch(e){ toast(e.message); }
         };
       });
-    }catch(e){ c.innerHTML = '<div class="empty"><div class="ic">📅</div>Ошибка: '+e.message+'</div>'; }
+    }catch(e){ c.innerHTML = '<div class="empty"><div class="ic">📅</div>Ошибка</div>'; }
   }
 
   else if(tab === 'ach'){
@@ -614,7 +892,14 @@ async function renderTab(tab){
         try{
           const r = await api('/api/wheel/spin');
           await animateWheel(r.prize.idx, info.prizes);
-          setTimeout(()=>{ toast('🎉 '+r.msg, 'gold', 5000); playWin(); loadMe(); renderTab('wheel'); }, 4200);
+          setTimeout(()=>{
+            toast('🎉 '+r.msg, 'gold', 5000);
+            // размер приза по его value
+            const val = r.prize.value || 0;
+            playRewardSound(val * 10);
+            loadMe();
+            renderTab('wheel');
+          }, 4200);
         }catch(e){ toast(e.message, 'pink'); $('spinBtn').disabled = false; }
       };
     }catch(e){ c.innerHTML = '<div class="empty"><div class="ic">🎡</div>Ошибка</div>'; }
@@ -635,7 +920,7 @@ async function renderTab(tab){
       try{
         const r = await api('/api/promo/redeem', {code});
         toast(`✅ +${fmt(r.reward)} (${r.kind})`, 'gold', 5000);
-        playWin();
+        playWin(2);
         await loadMe();
       }catch(e){ toast('Ошибка: '+e.message, 'pink', 3500); }
     };
@@ -718,7 +1003,7 @@ async function renderTab(tab){
             <button id="chCreate" class="qb" style="padding:14px;background:linear-gradient(135deg,#ffb84d,#ff9e00);color:#3a1e00">Создать</button>
           </div>`;
         $('chCreate').onclick = async ()=>{
-          try{ await api('/api/channel/create',{title:$('chTitle').value,username:$('chUser').value}); renderTab('channel'); }
+          try{ await api('/api/channel/create',{title:$('chTitle').value,username:$('chUser').value}); playCoin(); renderTab('channel'); }
           catch(e){ toast(e.message); }
         };
       } else {
@@ -797,7 +1082,7 @@ async function renderTab(tab){
   }
 }
 
-// ============ DUEL GAME ============
+// ============ DUEL ============
 async function renderDuelGame(c){
   const id = state.activeDuel; if(!id) return;
   c.innerHTML = `
@@ -861,7 +1146,7 @@ async function renderDuelGame(c){
   refresh();
 }
 
-// ============ WHEEL CANVAS ============
+// ============ КОЛЕСО ============
 function drawWheel(prizes){
   const cv = $('wheelCanvas'); if(!cv || !prizes) return;
   const dpr = devicePixelRatio||1;
@@ -925,5 +1210,5 @@ function animateWheel(targetIdx, prizes){
     if(l){ l.classList.add('off'); setTimeout(()=>l.remove(), 700); }
   }, 400);
   go('home');
-  attachSquirrelTap();
+  initSquirrel3D();
 })();
