@@ -247,7 +247,7 @@ function spawnCoinBurst(x, y){
 }
 
 // ============ 3D-БЕЛКА ============
-const SQUIRREL_MODEL_URL = 'https://github.com/utubovpirat-rgb/squirrel-combat/releases/download/v1/belka.glb';
+const SQUIRREL_MODEL_URL = '/belka.glb';
 let squirrelScene = null;
 let squirrelCamera = null;
 let squirrelRenderer = null;
