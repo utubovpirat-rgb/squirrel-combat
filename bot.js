@@ -227,7 +227,9 @@ bot.on(':successful_payment', async (ctx) => {
 // ---------- /admin ----------
 bot.command('admin', async (ctx) => {
   if(!ADMIN_IDS.includes(ctx.from.id)) return;
-  const kb = new InlineKeyboard().webApp('📊 Дашборд', `${WEBAPP_URL}/admin.html`);
+  const kb = new InlineKeyboard()
+    .webApp('📊 Дашборд', `${WEBAPP_URL}/admin.html`).row()
+    .webApp('🐿️ Открыть игру', WEBAPP_URL);
   await ctx.reply(`🔐 Админ-панель:`, {reply_markup: kb});
 });
 
@@ -245,15 +247,20 @@ bot.command('export', async (ctx) => {
 // ---------- /promo ----------
 bot.command('promo', async (ctx) => {
   if(!ADMIN_IDS.includes(ctx.from.id)) return;
-  const parts = (ctx.match || '').split(' ');
-  const [code, rewardStr, usesStr, kind, ttlStr] = parts;
+  const raw = String(ctx.match || '').trim();
+  const parts = raw.split(/\s+/);
+  const code = parts[0];
+  const rewardStr = parts[1];
+  const usesStr = parts[2];
+  const kind = parts[3];
+  const ttlStr = parts[4];
   if(!code || !rewardStr){
     return ctx.reply('Использование: /promo CODE reward uses kind ttl_days\nНапример: /promo NUTS2025 50000 100 coins 7');
   }
-  const reward = parseInt(rewardStr)||10000;
-  const uses = parseInt(usesStr)||100;
-  const k = ['coins','boost_energy','premium_days'].includes(kind)?kind:'coins';
-  const ttl = parseInt(ttlStr)||7;
+  const reward = parseInt(rewardStr) || 10000;
+  const uses = parseInt(usesStr) || 100;
+  const k = ['coins','boost_energy','premium_days'].includes(kind) ? kind : 'coins';
+  const ttl = parseInt(ttlStr) || 7;
   const { error } = await sbAdmin.from('promos').insert({
     code: code.toUpperCase(), reward, kind:k, uses_left:uses,
     expires_at: Math.floor(Date.now()/1000) + ttl*86400,
@@ -266,23 +273,73 @@ bot.command('promo', async (ctx) => {
 // ---------- /give ----------
 bot.command('give', async (ctx) => {
   if(!ADMIN_IDS.includes(ctx.from.id)) return;
-  const [_, tgIdStr, amountStr] = (ctx.match||'').split(' ');
-  const tgId = parseInt(tgIdStr), amount = parseInt(amountStr);
-  if(!tgId || !amount) return ctx.reply('Использование: /give <tg_id> <сумма>');
-  await DB.addBalance(tgId, amount);
-  await ctx.reply(`Выдано ${amount} игроку ${tgId}`);
+  const raw = String(ctx.match || '').trim();
+  const parts = raw.split(/\s+/);
+  const tgIdStr = parts[0];
+  const amountStr = parts[1];
+  const tgId = parseInt(tgIdStr, 10);
+  const amount = parseInt(amountStr, 10);
+  if(!tgId || !amount || isNaN(tgId) || isNaN(amount)){
+    return ctx.reply('Использование: /give <tg_id> <сумма>\nПример: /give 8389517241 100000');
+  }
+  try{
+    const target = await DB.getPlayer(tgId);
+    if(!target){
+      return ctx.reply(`Игрок с ID ${tgId} не найден в базе. Пусть сначала откроет бота и нажмёт /start.`);
+    }
+    await DB.addBalance(tgId, amount);
+    await ctx.reply(`✅ Выдано ${amount} орехов игроку ${target.first_name} (${tgId})`);
+  }catch(e){
+    await ctx.reply('Ошибка: ' + e.message);
+  }
 });
 
 // ---------- /ban ----------
 bot.command('ban', async (ctx) => {
   if(!ADMIN_IDS.includes(ctx.from.id)) return;
-  const tgId = parseInt(ctx.match);
-  if(!tgId) return;
+  const raw = String(ctx.match || '').trim();
+  const tgId = parseInt(raw, 10);
+  if(!tgId) return ctx.reply('Использование: /ban <tg_id>');
   await DB.updatePlayer(tgId, { banned: true });
-  await ctx.reply(`Забанен: ${tgId}`);
+  await ctx.reply(`🚫 Забанен: ${tgId}`);
+});
+
+// ---------- /unban ----------
+bot.command('unban', async (ctx) => {
+  if(!ADMIN_IDS.includes(ctx.from.id)) return;
+  const raw = String(ctx.match || '').trim();
+  const tgId = parseInt(raw, 10);
+  if(!tgId) return ctx.reply('Использование: /unban <tg_id>');
+  await DB.updatePlayer(tgId, { banned: false });
+  await ctx.reply(`✅ Разбанен: ${tgId}`);
+});
+
+// ---------- /setmenu (обновить кнопку вручную) ----------
+bot.command('setmenu', async (ctx) => {
+  if(!ADMIN_IDS.includes(ctx.from.id)) return;
+  const me = await bot.api.getMe();
+  const url = `${WEBAPP_URL}`;
+  try{
+    await bot.api.setChatMenuButton({
+      menu_button: {
+        type: 'web_app',
+        text: '🐿️ Играть',
+        web_app: { url }
+      }
+    });
+    await ctx.reply(`✅ Menu Button обновлён: ${url}`);
+  }catch(e){
+    await ctx.reply('Ошибка: ' + e.message);
+  }
+});
+
+// ---------- /ping ----------
+bot.command('ping', async (ctx) => {
+  await ctx.reply(`🏓 Pong! Бот работает.\nТвой ID: ${ctx.from.id}\nТы админ: ${ADMIN_IDS.includes(ctx.from.id) ? 'да' : 'нет'}`);
 });
 
 // ---------- заглушка ----------
 bot.on('message:text', async (ctx) => {
+  if(ctx.message.text.startsWith('/')) return;
   await ctx.reply('Жми /start чтобы открыть игру 🐿️');
 });
