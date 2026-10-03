@@ -588,17 +588,43 @@ app.post('/api/session/upgrade', auth, async (req,res)=>{
 });
 
 async function ensureDailyQuests(tgId){
-  const day = todayUTC();
-  const { data: existing } = await sbAdmin.from('daily_quests')
-    .select('*').eq('tg_id', tgId).eq('day', day);
-  if(existing && existing.length) return existing;
-  const { data: pool } = await sbAdmin.from('quest_pool').select('*');
-  const picked = (pool||[]).sort(()=>Math.random()-.5).slice(0,5);
-  const rows = picked.map(q=>({
-    tg_id:tgId, day, quest_id:q.id, progress:0, goal:q.goal, claimed:false
-  }));
-  if(rows.length) await sbAdmin.from('daily_quests').insert(rows);
-  return rows;
+  try{
+    const day = todayUTC();
+    const tgNum = parseInt(tgId, 10);
+    console.log('[ensureDailyQuests] start', tgNum, day);
+
+    const { data: existing, error: e1 } = await sbAdmin.from('daily_quests')
+      .select('*').eq('tg_id', tgNum).eq('day', day);
+    if(e1){ console.error('[daily select error]', JSON.stringify(e1)); }
+    if(existing && existing.length){
+      console.log('[ensureDailyQuests] existing', existing.length);
+      return existing;
+    }
+
+    const { data: pool, error: e2 } = await sbAdmin.from('quest_pool').select('*');
+    if(e2){ console.error('[quest_pool error]', JSON.stringify(e2)); }
+    if(!pool || !pool.length){
+      console.error('[quest_pool empty]');
+      return [];
+    }
+    console.log('[quest_pool size]', pool.length);
+
+    const picked = [...pool].sort(()=>Math.random()-.5).slice(0,5);
+    const rows = picked.map(q=>({
+      tg_id:tgNum, day, quest_id:q.id, progress:0, goal:q.goal, claimed:false
+    }));
+
+    const { error: e3 } = await sbAdmin.from('daily_quests').insert(rows);
+    if(e3){
+      console.error('[daily insert error]', JSON.stringify(e3));
+      return [];
+    }
+    console.log('[ensureDailyQuests] inserted', rows.length);
+    return rows;
+  }catch(e){
+    console.error('[ensureDailyQuests fatal]', e.message, e.stack);
+    return [];
+  }
 }
 app.get('/api/daily/list', auth, async (req,res)=>{
   try{
