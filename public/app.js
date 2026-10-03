@@ -368,8 +368,9 @@ function startSquirrelScene(){
 
   const scene = new THREE.Scene();
   squirrelScene = scene;
+
   const camera = new THREE.PerspectiveCamera(38, W/H, 0.1, 100);
-  camera.position.set(0, 1.1, 4.2);
+  camera.position.set(0, 1.15, 4.6);
   camera.lookAt(0, 0.2, 0);
   squirrelCamera = camera;
 
@@ -386,29 +387,36 @@ function startSquirrelScene(){
   sun.shadow.mapSize.width = 1024;
   sun.shadow.mapSize.height = 1024;
   scene.add(sun);
+
   const fill = new THREE.DirectionalLight(0xffd9a8, 0.55);
   fill.position.set(-3, 2, -3);
   scene.add(fill);
+
   const bottom = new THREE.PointLight(0xffb84d, 0.7, 12);
   bottom.position.set(0, -2, 1);
   scene.add(bottom);
+
   scene.add(new THREE.AmbientLight(0xffffff, 0.45));
 
+  // Загрузка модели
   const loader = new THREE.GLTFLoader();
   loader.load(SQUIRREL_MODEL_URL, (gltf)=>{
     const model = gltf.scene;
     squirrelModel = model;
+
     const box = new THREE.Box3().setFromObject(model);
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z);
-    const scale = 2.2 / maxDim;
+    const scale = 2.9 / maxDim;
     model.scale.setScalar(scale);
+
     box.setFromObject(model);
     box.getCenter(center);
     model.position.x -= center.x * scale;
-    model.position.y -= center.y * scale;
+    model.position.y -= center.y * scale - 0.35;
     model.position.z -= center.z * scale;
+
     model.traverse((child)=>{
       if(child.isMesh){
         child.castShadow = true;
@@ -419,7 +427,9 @@ function startSquirrelScene(){
         }
       }
     });
+
     scene.add(model);
+
     if(gltf.animations && gltf.animations.length){
       squirrelMixer = new THREE.AnimationMixer(model);
       gltf.animations.forEach(clip=>squirrelMixer.clipAction(clip).play());
@@ -429,12 +439,25 @@ function startSquirrelScene(){
     fallbackToEmoji();
   });
 
-  const shadowGeo = new THREE.CircleGeometry(1.3, 32);
-  const shadowMat = new THREE.MeshBasicMaterial({ color: 0xffb84d, transparent: true, opacity: 0.12 });
-  const shadow = new THREE.Mesh(shadowGeo, shadowMat);
-  shadow.rotation.x = -Math.PI / 2;
-  shadow.position.y = -1.15;
-  scene.add(shadow);
+  // Жёлтый подиум — широкий круг
+  const podiumGeo = new THREE.CircleGeometry(1.55, 64);
+  const podiumMat = new THREE.MeshBasicMaterial({
+    color: 0xffb84d, transparent: true, opacity: 0.35
+  });
+  const podium = new THREE.Mesh(podiumGeo, podiumMat);
+  podium.rotation.x = -Math.PI / 2;
+  podium.position.y = -1.25;
+  scene.add(podium);
+
+  // Внутренний тёплый круг (ярче)
+  const podiumInnerGeo = new THREE.CircleGeometry(1.0, 48);
+  const podiumInnerMat = new THREE.MeshBasicMaterial({
+    color: 0xffd166, transparent: true, opacity: 0.25
+  });
+  const podiumInner = new THREE.Mesh(podiumInnerGeo, podiumInnerMat);
+  podiumInner.rotation.x = -Math.PI / 2;
+  podiumInner.position.y = -1.24;
+  scene.add(podiumInner);
 
   if(!squirrelLoopStarted){
     squirrelLoopStarted = true;
